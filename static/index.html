@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weekly Progress Dashboard</title>
+    <!-- Google Fonts for Modern Typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- Local Stylesheet -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    
+    <div class="dashboard-wrapper">
+        <header class="dashboard-header">
+            <div class="header-content">
+                <h1>Weekly Analytics</h1>
+                <p>Team Task Progress Overview</p>
+            </div>
+            
+            <div class="overall-progress">
+                <div class="progress-circle">
+                    <svg viewBox="0 0 36 36" class="circular-chart">
+                        <path class="circle-bg"
+                          d="M18 2.0845
+                            a 15.9155 15.9155 0 0 1 0 31.831
+                            a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                        <path class="circle" id="overall-chart-val" stroke-dasharray="0, 100"
+                          d="M18 2.0845
+                            a 15.9155 15.9155 0 0 1 0 31.831
+                            a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                    </svg>
+                    <div class="percentage" id="overall-percentage">0%</div>
+                </div>
+                <div class="overall-text">Total Completion</div>
+            </div>
+        </header>
+
+        <section class="cards-grid" id="staff-grid">
+            <!-- Dynamic Staff Cards will be injected here via JavaScript -->
+        </section>
+
+        <!-- Template for a Staff Card -->
+        <template id="card-template">
+            <div class="staff-card">
+                <div class="card-header">
+                    <h2 class="employee-name">Name</h2>
+                    <span class="status-badge">Status</span>
+                </div>
+                <div class="task-info">
+                    <p class="task-label">Current Task</p>
+                    <p class="task-name">Task Description</p>
+                </div>
+                <div class="progress-container">
+                    <div class="progress-header">
+                        <span class="progress-label">Completion</span>
+                        <span class="progress-value">0%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-fill"></div>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- Local Script -->
+    <script src="/static/main.js"></script>
+</body>
+</html>
