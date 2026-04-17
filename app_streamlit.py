@@ -1028,33 +1028,55 @@ if page == "Dashboard":
             if up_type == "File":
                 st.markdown("##### Attached Files")
                 has_files = False
+                
+                # Combine physical files + metadata files
+                files_to_show = []
                 if os.path.exists(topic_dir):
                     files_to_show = [f for f in os.listdir(topic_dir) if f != ".metadata.json"]
-                    if files_to_show:
-                        has_files = True
-                        for file_item in files_to_show:
-                            file_path = os.path.join(topic_dir, file_item)
-                            f_note = topic_meta.get("files", {}).get(file_item, {}).get("note", "")
-                            
-                            f_col1, f_col2 = st.columns([4, 1])
-                            with f_col1:
+                
+                # Also include files from metadata that aren't downloaded physically
+                meta_files = topic_meta.get("files", {})
+                for f_name in meta_files.keys():
+                    if f_name not in files_to_show:
+                        files_to_show.append(f_name)
+
+                if files_to_show:
+                    has_files = True
+                    for file_item in files_to_show:
+                        file_path = os.path.join(topic_dir, file_item)
+                        f_info = topic_meta.get("files", {}).get(file_item, {})
+                        f_note = f_info.get("note", "")
+                        d_url = f_info.get("drive_url", "")
+                        
+                        f_col1, f_col2 = st.columns([4, 1])
+                        with f_col1:
+                            if os.path.exists(file_path):
                                 if file_item.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
                                     st.image(file_path, caption=f"{file_item}" + (f" - {f_note}" if f_note else ""), use_container_width=True)
                                 else:
                                     with open(file_path, "rb") as bf:
                                         lbl_txt = f"📄 {file_item}" + (f" - {f_note}" if f_note else "")
                                         st.download_button(label=lbl_txt, data=bf, file_name=file_item, mime="application/octet-stream", key=f"dl_{btn_key}_{t_topic}_{file_item}")
-                            with f_col2:
-                                if st.button("🗑️", key=f"del_{btn_key}_{t_topic}_{file_item}", help="Delete File"):
+                            else:
+                                if d_url:
+                                    lbl_txt = f"☁️ [View missing local file on Drive: {file_item}]({d_url})" + (f" - {f_note}" if f_note else "")
+                                    st.markdown(lbl_txt)
+                                else:
+                                    st.warning(f"⚠️ {file_item} (Missing locally without Drive link)")
+
+                        with f_col2:
+                            if st.button("🗑️", key=f"del_{btn_key}_{t_topic}_{file_item}", help="Delete File"):
+                                if os.path.exists(file_path):
                                     try:
                                         os.remove(file_path)
                                     except:
                                         pass
-                                    if "files" in topic_meta and file_item in topic_meta["files"]:
-                                        del topic_meta["files"][file_item]
-                                        with open(meta_path, "w") as mf:
-                                            json.dump(topic_meta, mf, indent=4)
-                                    st.rerun()
+                                if "files" in topic_meta and file_item in topic_meta["files"]:
+                                    del topic_meta["files"][file_item]
+                                    with open(meta_path, "w") as mf:
+                                        json.dump(topic_meta, mf, indent=4)
+                                st.rerun()
+
                 if not has_files:
                     st.info(f"No files attached to '{t_topic}' yet.")
 
@@ -2353,52 +2375,65 @@ elif page == "Document Drive":
         st.info("No links attached yet.")
         
     st.markdown("#### 📄 Uploaded Files")
+    
+    files = []
     if os.path.exists(target_dir):
         files = [f for f in os.listdir(target_dir) if f != ".metadata.json"]
-        if files:
-            for idx, file_item in enumerate(files):
-                with st.container():
-                    c1, c2, c3, c4 = st.columns([3, 3, 1, 1])
-                    file_path = os.path.join(target_dir, file_item)
-                    
+    meta_files = topic_dir_meta.get("files", {})
+    for f_name in meta_files.keys():
+        if f_name not in files:
+            files.append(f_name)
+            
+    if files:
+        for idx, file_item in enumerate(files):
+            with st.container():
+                c1, c2, c3, c4 = st.columns([3, 3, 1, 1])
+                file_path = os.path.join(target_dir, file_item)
+                d_url = meta_files.get(file_item, {}).get("drive_url", "")
+                
+                if os.path.exists(file_path):
                     with open(file_path, "rb") as bf:
                         c1.download_button(label=f"⬇️ {file_item}", data=bf, file_name=file_item, mime="application/octet-stream", key=f"dl_{idx}")
-                    
-                    current_fnote = topic_meta.get("file_notes", {}).get(file_item, "")
-                    if not current_fnote and "files" in topic_dir_meta and file_item in topic_dir_meta["files"]:
-                        current_fnote = topic_dir_meta["files"][file_item].get("note", "")
+                else:
+                    if d_url:
+                        c1.markdown(f"☁️ [View file on Drive: {file_item}]({d_url})")
+                    else:
+                        c1.warning(f"⚠️ {file_item} (Missing)")
+                
+                current_fnote = topic_meta.get("file_notes", {}).get(file_item, "")
+                if not current_fnote and "files" in topic_dir_meta and file_item in topic_dir_meta["files"]:
+                    current_fnote = topic_dir_meta["files"][file_item].get("note", "")
 
-                    updated_fnote = c2.text_input("Note", value=current_fnote, key=f"fnote_{idx}", label_visibility="collapsed", placeholder="Add a short note...")
-                    if c3.button("💾 Save", key=f"sf_{idx}"):
-                        if "file_notes" not in topic_meta:
-                            topic_meta["file_notes"] = {}
-                        topic_meta["file_notes"][file_item] = updated_fnote
-                        
-                        if "files" not in topic_dir_meta:
-                            topic_dir_meta["files"] = {}
-                        if file_item not in topic_dir_meta["files"]:
-                            topic_dir_meta["files"][file_item] = {}
-                        topic_dir_meta["files"][file_item]["note"] = updated_fnote
-                        
-                        save_drive_metadata(drive_meta)
-                        with open(meta_path, "w") as mf:
-                            json.dump(topic_dir_meta, mf, indent=4)
-                        st.success("Saved!")
-                    if c4.button("🗑️ Del", key=f"df_{idx}"):
+                updated_fnote = c2.text_input("Note", value=current_fnote, key=f"fnote_{idx}", label_visibility="collapsed", placeholder="Add a short note...")
+                if c3.button("💾 Save", key=f"sf_{idx}"):
+                    if "file_notes" not in topic_meta:
+                        topic_meta["file_notes"] = {}
+                    topic_meta["file_notes"][file_item] = updated_fnote
+                    
+                    if "files" not in topic_dir_meta:
+                        topic_dir_meta["files"] = {}
+                    if file_item not in topic_dir_meta["files"]:
+                        topic_dir_meta["files"][file_item] = {}
+                    topic_dir_meta["files"][file_item]["note"] = updated_fnote
+                    
+                    save_drive_metadata(drive_meta)
+                    with open(meta_path, "w") as mf:
+                        json.dump(topic_dir_meta, mf, indent=4)
+                    st.success("Saved!")
+                if c4.button("🗑️ Del", key=f"df_{idx}"):
+                    if os.path.exists(file_path):
                         try:
                             os.remove(file_path)
                         except:
                             pass
-                        if file_item in topic_meta.get("file_notes", {}):
-                            del topic_meta["file_notes"][file_item]
-                            save_drive_metadata(drive_meta)
-                        if "files" in topic_dir_meta and file_item in topic_dir_meta["files"]:
-                            del topic_dir_meta["files"][file_item]
-                            with open(meta_path, "w") as mf:
-                                json.dump(topic_dir_meta, mf, indent=4)
-                        st.rerun()
-        else:
-            st.info("No files uploaded for this topic yet.")
+                    if file_item in topic_meta.get("file_notes", {}):
+                        del topic_meta["file_notes"][file_item]
+                        save_drive_metadata(drive_meta)
+                    if "files" in topic_dir_meta and file_item in topic_dir_meta["files"]:
+                        del topic_dir_meta["files"][file_item]
+                        with open(meta_path, "w") as mf:
+                            json.dump(topic_dir_meta, mf, indent=4)
+                    st.rerun()
     else:
         st.info("No files uploaded for this topic yet.")
 
