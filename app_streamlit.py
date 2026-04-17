@@ -188,6 +188,48 @@ def _get_streamlit_secret(key, default=None):
         return default
 
 def _load_google_drive_credentials():
+    import os
+    import json
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+    except ImportError:
+        Credentials = None
+        Request = None
+
+    creds = None
+
+    if os.path.exists('token.json') and Credentials is not None:
+        try:
+            creds = Credentials.from_authorized_user_file('token.json', GOOGLE_DRIVE_SCOPES)
+        except Exception:
+            pass
+
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+        except Exception:
+            creds = None
+
+    if not creds or not creds.valid:
+        if os.path.exists('credentials.json'):
+            try:
+                from google_auth_oauthlib.flow import InstalledAppFlow
+                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
+                creds = flow.run_local_server(port=0)
+                with open('token.json', 'w') as token:
+                    token.write(creds.to_json())
+            except Exception as e:
+                try:
+                    st.sidebar.error(f"OAuth Flow error: {e}")
+                except:
+                    pass
+
+    if creds and creds.valid:
+        return creds
+
     if service_account is None:
         return None
 
@@ -208,9 +250,9 @@ def _load_google_drive_credentials():
                 scopes=GOOGLE_DRIVE_SCOPES
             )
         except Exception:
-            return None
+            pass
 
-    # 3. ✅ FIXED: Read from Streamlit secrets (THIS is your main case)
+    # 3. Read from Streamlit secrets
     try:
         secret_account = st.secrets.get("service_account") or st.secrets.get("gdrive_service_account")
 
@@ -254,10 +296,10 @@ def get_google_drive_root_folder_id():
     secret_root_id = _get_streamlit_secret("gdrive_root_folder_id", "")
     if secret_root_id:
         return str(secret_root_id).strip()
-    return ""
+    return "root"
 
 def google_drive_is_ready():
-    return bool(get_google_drive_root_folder_id()) and get_google_drive_service() is not None
+    return get_google_drive_service() is not None
 
 
 
@@ -376,8 +418,11 @@ def save_uploaded_file(file_obj, local_path, drive_path_parts=None):
     with open(local_path, "wb") as f_out:
         f_out.write(file_bytes)
 
-    # Default drive path if none provided
-    if not drive_path_parts:
+    # Mirror local directory structure for Google Drive upload
+    local_dir = os.path.dirname(local_path)
+    if local_dir:
+        drive_path_parts = [part for part in os.path.normpath(local_dir).split(os.sep) if part]
+    elif not drive_path_parts:
         drive_path_parts = ["DefaultProject", "General"]
 
     drive_result = None

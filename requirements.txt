@@ -2,3 +2,4 @@ streamlit
 pandas
 plotly
 openpyxl
+google-auth-oauthlib\ngoogle-api-python-client\ngoogle-auth-httplib2
