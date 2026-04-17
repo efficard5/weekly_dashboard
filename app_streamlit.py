@@ -950,13 +950,6 @@ if page == "Dashboard":
                 except:
                     topic_meta = {}
 
-            with st.expander("Google Drive Debug"):
-                debug_info = get_google_drive_debug_info()
-                st.write("Root ID:", debug_info["root_id"] or "<missing>")
-                st.write("Service:", debug_info["service_repr"])
-                st.write("Credentials Loaded:", debug_info["credentials_ready"])
-                st.write("Drive Ready:", debug_info["drive_ready"])
-
             # 1. Upload Section at the TOP
             st.markdown("##### Upload Document / Link")
             up_type = st.radio("Type", ["File", "Link"], horizontal=True, key=f"uptype_{btn_key}_{t_topic}")
@@ -2183,12 +2176,6 @@ elif page == "Image Gallery":
     
     # Upload Form
     with st.expander("➕ Link New Image to Dashboard Target", expanded=True):
-        debug_info = get_google_drive_debug_info()
-        st.caption(
-            f"Drive Ready: {debug_info['drive_ready']} | "
-            f"Credentials Loaded: {debug_info['credentials_ready']} | "
-            f"Root ID: {debug_info['root_id'] or '<missing>'}"
-        )
         fcol1, fcol2 = st.columns(2)
         up_proj = fcol1.selectbox("Target Project", projects)
         up_topic = fcol2.selectbox("Target Subsystem/Topic", topics)
