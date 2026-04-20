@@ -192,27 +192,14 @@ def load_competitor_data():
         except Exception:
             pass
 
-    return {
-        "Unloading Rate": [
-            {"Competitor": "Boston Dynamics", "Value": "800 cph"},
-            {"Competitor": "Pickle", "Value": "600+ cph"},
-            {"Competitor": "XYZ", "Value": "500+ cph"},
-            {"Competitor": "Dexiterity", "Value": "1000 cph"},
-            {"Competitor": "Mujin", "Value": "1000+ cph"},
-            {"Competitor": "Technica", "Value": "240 full rows/hour"},
-            {"Competitor": "Anyware robotics", "Value": "1000 cph"},
-            {"Competitor": "Kawasaki", "Value": "600 cph"},
-            {"Competitor": "Yaskawa Motoman", "Value": "600+ cph"}
-        ],
-        "Camera": [],
-        "Vacuum System": []
-    }
+    return {}
 
 def save_competitor_data(data):
     os.makedirs("data", exist_ok=True)
+    file_path = "data/competitors.xlsx"
     import pandas as pd
     try:
-        with pd.ExcelWriter("data/competitors.xlsx") as writer:
+        with pd.ExcelWriter(file_path) as writer:
             if not data:
                 pd.DataFrame(columns=["Competitor", "Value", "Notes"]).to_excel(writer, sheet_name="Empty", index=False)
             else:
@@ -222,6 +209,10 @@ def save_competitor_data(data):
                         pd.DataFrame(columns=["Competitor", "Value", "Notes"]).to_excel(writer, sheet_name=safe_sheet, index=False)
                     else:
                         pd.DataFrame(rows).to_excel(writer, sheet_name=safe_sheet, index=False)
+                        
+        if google_drive_is_ready():
+            with open(file_path, "rb") as f:
+                upload_bytes_to_drive(["Competitor Benchmarks"], "competitors.xlsx", f.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
         import streamlit as st
         st.error(f"Failed to save excel: {e}")
