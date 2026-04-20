@@ -2336,11 +2336,15 @@ elif page == "Competitors & Research":
                     new_col_name = st.text_input("New Column Name", key=f"new_col_name_{topic}")
                     if st.button("Add Column", key=f"add_col_btn_{topic}"):
                         if new_col_name and new_col_name not in columns:
-                            if not rows:
-                                comp_data[topic] = [{c: "" for c in columns + [new_col_name]}]
-                            else:
-                                for r in comp_data[topic]:
-                                    r[new_col_name] = ""
+                            # Use current state from editor instead of stale comp_data
+                            current_rows = edited_df.fillna("").to_dict(orient="records")
+                            if not current_rows:
+                                current_rows = [{c: "" for c in columns}]
+                            
+                            for r in current_rows:
+                                r[new_col_name] = ""
+                            
+                            comp_data[topic] = current_rows
                             save_competitor_data(comp_data)
                             st.rerun()
 
@@ -2351,9 +2355,13 @@ elif page == "Competitors & Research":
                         if len(columns) <= 1:
                             st.error("Cannot delete the last column.")
                         else:
-                            for r in comp_data[topic]:
+                            # Use current state from editor
+                            current_rows = edited_df.fillna("").to_dict(orient="records")
+                            for r in current_rows:
                                 if col_to_delete in r:
                                     del r[col_to_delete]
+                            
+                            comp_data[topic] = current_rows
                             save_competitor_data(comp_data)
                             st.rerun()
 
