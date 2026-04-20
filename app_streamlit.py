@@ -186,7 +186,11 @@ def load_competitor_data():
             for sheet, df in xls.items():
                 if sheet == "Empty" and df.empty:
                     continue
-                safe_data[sheet] = df.fillna("").to_dict(orient="records")
+                if df.empty:
+                    cols = df.columns.tolist()
+                    safe_data[sheet] = [{c: "" for c in cols}]
+                else:
+                    safe_data[sheet] = df.fillna("").to_dict(orient="records")
             if safe_data:
                 return safe_data
         except Exception:
