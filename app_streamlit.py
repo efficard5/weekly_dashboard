@@ -17,11 +17,12 @@ except ImportError:
 try:
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload
+    from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 except ImportError:
     service_account = None
     build = None
     MediaIoBaseUpload = None
+    MediaIoBaseDownload = None
 
 
 
@@ -142,6 +143,7 @@ def load_data():
 def save_data(data_df):
     os.makedirs("data", exist_ok=True)
     data_df.to_excel("data/tasks.xlsx", index=False)
+    sync_data_file_to_drive("data/tasks.xlsx")
     st.cache_data.clear()  # Ensure the next load reflects the newly saved data
 
 def load_notes():
@@ -154,6 +156,7 @@ def save_notes(notes):
     os.makedirs("data", exist_ok=True)
     with open("data/project_notes.json", "w") as f:
         json.dump(notes, f, indent=4)
+    sync_data_file_to_drive("data/project_notes.json")
 
 def load_planned_milestones():
     if os.path.exists("data/planned_milestones.json"):
@@ -165,6 +168,7 @@ def save_planned_milestones(milestones):
     os.makedirs("data", exist_ok=True)
     with open("data/planned_milestones.json", "w") as f:
         json.dump(milestones, f, indent=4)
+    sync_data_file_to_drive("data/planned_milestones.json")
 
 def load_drive_metadata():
     if os.path.exists("data/drive_metadata.json"):
@@ -176,6 +180,7 @@ def save_drive_metadata(data):
     os.makedirs("data", exist_ok=True)
     with open("data/drive_metadata.json", "w") as f:
         json.dump(data, f, indent=4)
+    sync_data_file_to_drive("data/drive_metadata.json")
 
 def load_competitor_data():
     file_path = "data/competitors.xlsx"
@@ -214,9 +219,7 @@ def save_competitor_data(data):
                     else:
                         pd.DataFrame(rows).to_excel(writer, sheet_name=safe_sheet, index=False)
                         
-        if google_drive_is_ready():
-            with open(file_path, "rb") as f:
-                upload_bytes_to_drive(["Competitor Benchmarks"], "competitors.xlsx", f.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        sync_data_file_to_drive(file_path)
     except Exception as e:
         import streamlit as st
         st.error(f"Failed to save excel: {e}")
@@ -449,6 +452,62 @@ def upload_bytes_to_drive(path_parts, file_name, file_bytes, mime_type=None):
             supportsAllDrives=True
         ).execute()
     return file_obj
+
+
+def sync_data_file_to_drive(local_path):
+    """Upload a specific local data file to the 'System Data' folder on Drive"""
+    if not google_drive_is_ready():
+        return
+    try:
+        import os
+        if not os.path.exists(local_path):
+            return
+        file_name = os.path.basename(local_path)
+        with open(local_path, "rb") as f:
+            upload_bytes_to_drive(["System Data"], file_name, f.read())
+    except:
+        pass
+
+
+def pull_backend_data_from_drive():
+    """Download all core data files from Drive to local data/ folder on startup"""
+    if not google_drive_is_ready():
+        return
+    
+    service = get_google_drive_service()
+    parent_id = ensure_drive_path(["System Data"])
+    if not parent_id:
+        return
+        
+    try:
+        results = service.files().list(
+            q=f"'{parent_id}' in parents and trashed = false",
+            fields="files(id, name)"
+        ).execute()
+        files = results.get("files", [])
+        
+        import io
+        if not MediaIoBaseDownload:
+            return
+            
+        os.makedirs("data", exist_ok=True)
+        for f in files:
+            file_id = f['id']
+            file_name = f['name']
+            local_path = os.path.join("data", file_name)
+            
+            request = service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+            
+            with open(local_path, "wb") as local_file:
+                local_file.write(fh.getvalue())
+    except Exception as e:
+        # Silently fail if Drive is not empty but no sync possible
+        pass
 
 
 def save_uploaded_file(file_obj, local_path, drive_path_parts=None):
@@ -881,6 +940,11 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
                 save_planned_milestones(pm_data)
                 st.rerun()
 
+
+# --- INITIAL SYNC ---
+if "data_synced" not in st.session_state:
+    pull_backend_data_from_drive()
+    st.session_state.data_synced = True
 
 df = load_data()
 
