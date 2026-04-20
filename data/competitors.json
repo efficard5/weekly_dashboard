@@ -1,0 +1,179 @@
+{
+    "Unloading Rate": [
+        {
+            "Competitor": "Boston Dynamics",
+            "Value": "800 cph"
+        },
+        {
+            "Competitor": "Pickle",
+            "Value": "600+ cph"
+        },
+        {
+            "Competitor": "XYZ",
+            "Value": "500+ cph"
+        },
+        {
+            "Competitor": "Dexiterity",
+            "Value": "1000 cph"
+        },
+        {
+            "Competitor": "Mujin",
+            "Value": "1000+ cph"
+        },
+        {
+            "Competitor": "Technica",
+            "Value": "240 full rows/hour"
+        },
+        {
+            "Competitor": "Anyware robotics",
+            "Value": "1000 cph"
+        },
+        {
+            "Competitor": "Kawasaki",
+            "Value": "600 cph"
+        },
+        {
+            "Competitor": "Yaskawa Motoman",
+            "Value": "600+ cph"
+        }
+    ],
+    "Camera": [
+        {
+            "Name": "Boston Dynamics",
+            "Mounting Style": "Verical BarMount",
+            "Number of camera": "2",
+            "FOV": "108 X 78 (WORKING DISTANCE 1.3-8.3M)@1500 mm-4129x2447 @1200mm-1941x1509mm",
+            "Technology": "TIME OF FLIGHT"
+        },
+        {
+            "Name": "Pickle",
+            "Mounting Style": "Verical BarMount",
+            "Number of camera": "2",
+            "FOV": "87\u00b0 \u00d7 58\u00b0  @1500mm-2859x1661 @1200mm-1652x1163mm",
+            "Technology": "ACTIVE STERIO"
+        },
+        {
+            "Name": "XYZ",
+            "Mounting Style": "TOP & BOTTOM MOUNT",
+            "Number of camera": "3",
+            "FOV": "1032 X1148 @1200",
+            "Technology": "ACTIVE STERIO"
+        },
+        {
+            "Name": "Dexiterity",
+            "Mounting Style": "TOP MOUNT",
+            "Number of camera": "3",
+            "FOV": "120X120",
+            "Technology": "TIME OF FLIGHT"
+        },
+        {
+            "Name": "Mujin",
+            "Mounting Style": "CENTRE MOUNT",
+            "Number of camera": "1",
+            "FOV": "800 \u00d7 450 @ 1.0 m\n1500 \u00d7 890 @ 2.0 m",
+            "Technology": "STRUCTURED LIGHT"
+        },
+        {
+            "Name": "Technica",
+            "Mounting Style": "SIDE MOUNT",
+            "Number of camera": "1",
+            "FOV": "1322 X 907 @1760mm",
+            "Technology": "ACTIVE STERIO"
+        },
+        {
+            "Name": "Anyware robotics",
+            "Mounting Style": "ON EOAT",
+            "Number of camera": "1",
+            "FOV": "\n87\u00b0 \u00d7 58\u00b0\n",
+            "Technology": "ACTIVE STERIO"
+        },
+        {
+            "Name": "Kawaski",
+            "Mounting Style": "ON EOAT and In AGV (FRAMOS)",
+            "Number of camera": "",
+            "FOV": "",
+            "Technology": ""
+        },
+        {
+            "Name": "Yaskawa Motomon",
+            "Mounting Style": "ON EOAT",
+            "Number of camera": "",
+            "FOV": "",
+            "Technology": ""
+        }
+    ],
+    "Vacuum System": [
+        {
+            "Name": "Boston Dynamics",
+            "Hoses": "Cacuum Blower",
+            "Number of Cups": "50",
+            "Rows": "5",
+            "Columns": "10",
+            "Folds": "2.5"
+        },
+        {
+            "Name": "Pickle",
+            "Hoses": "Vacuum Blower",
+            "Number of Cups": "Foam",
+            "Rows": "-",
+            "Columns": "-",
+            "Folds": "-"
+        },
+        {
+            "Name": "XYZ",
+            "Hoses": "Vacuum Blower",
+            "Number of Cups": "72",
+            "Rows": "6",
+            "Columns": "12",
+            "Folds": "2.5"
+        },
+        {
+            "Name": "Dexiterity",
+            "Hoses": "Vacuum Blower",
+            "Number of Cups": "20",
+            "Rows": "5",
+            "Columns": "4",
+            "Folds": "2.5"
+        },
+        {
+            "Name": "Mujin",
+            "Hoses": "Vacuum Generator",
+            "Number of Cups": "6",
+            "Rows": "5",
+            "Columns": "1",
+            "Folds": "2.5"
+        },
+        {
+            "Name": "Technica",
+            "Hoses": "Vacuum Generator",
+            "Number of Cups": "24",
+            "Rows": "12",
+            "Columns": "2",
+            "Folds": "-"
+        },
+        {
+            "Name": "Anyware robotics",
+            "Hoses": "Vacuum Blower",
+            "Number of Cups": "46",
+            "Rows": "6",
+            "Columns": "8",
+            "Folds": "2.5"
+        },
+        {
+            "Name": "Kawasaki",
+            "Hoses": "Vacuum Generator",
+            "Number of Cups": "Foam",
+            "Rows": "-",
+            "Columns": "-",
+            "Folds": "-"
+        },
+        {
+            "Name": "Yaskawa Motoman",
+            "Hoses": "Vacuum Blower",
+            "Number of Cups": "16",
+            "Rows": "4",
+            "Columns": "4",
+            "Folds": ""
+        }
+    ]
+}
