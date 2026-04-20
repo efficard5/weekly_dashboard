@@ -178,9 +178,20 @@ def save_drive_metadata(data):
         json.dump(data, f, indent=4)
 
 def load_competitor_data():
-    if os.path.exists("data/competitors.json"):
-        with open("data/competitors.json", "r") as f:
-            return json.load(f)
+    file_path = "data/competitors.xlsx"
+    if os.path.exists(file_path):
+        try:
+            xls = pd.read_excel(file_path, sheet_name=None)
+            safe_data = {}
+            for sheet, df in xls.items():
+                if sheet == "Empty" and df.empty:
+                    continue
+                safe_data[sheet] = df.fillna("").to_dict(orient="records")
+            if safe_data:
+                return safe_data
+        except Exception:
+            pass
+
     return {
         "Unloading Rate": [
             {"Competitor": "Boston Dynamics", "Value": "800 cph"},
@@ -192,13 +203,28 @@ def load_competitor_data():
             {"Competitor": "Anyware robotics", "Value": "1000 cph"},
             {"Competitor": "Kawasaki", "Value": "600 cph"},
             {"Competitor": "Yaskawa Motoman", "Value": "600+ cph"}
-        ]
+        ],
+        "Camera": [],
+        "Vacuum System": []
     }
 
 def save_competitor_data(data):
     os.makedirs("data", exist_ok=True)
-    with open("data/competitors.json", "w") as f:
-        json.dump(data, f, indent=4)
+    import pandas as pd
+    try:
+        with pd.ExcelWriter("data/competitors.xlsx") as writer:
+            if not data:
+                pd.DataFrame(columns=["Competitor", "Value", "Notes"]).to_excel(writer, sheet_name="Empty", index=False)
+            else:
+                for topic, rows in data.items():
+                    safe_sheet = str(topic).replace("/", "_").replace("\\", "_").replace("?", "").replace("*", "").replace("[", "").replace("]", "")[:31]
+                    if not rows:
+                        pd.DataFrame(columns=["Competitor", "Value", "Notes"]).to_excel(writer, sheet_name=safe_sheet, index=False)
+                    else:
+                        pd.DataFrame(rows).to_excel(writer, sheet_name=safe_sheet, index=False)
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Failed to save excel: {e}")
 
 GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
