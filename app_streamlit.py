@@ -177,6 +177,29 @@ def save_drive_metadata(data):
     with open("data/drive_metadata.json", "w") as f:
         json.dump(data, f, indent=4)
 
+def load_competitor_data():
+    if os.path.exists("data/competitors.json"):
+        with open("data/competitors.json", "r") as f:
+            return json.load(f)
+    return {
+        "Unloading Rate": [
+            {"Competitor": "Boston Dynamics", "Value": "800 cph"},
+            {"Competitor": "Pickle", "Value": "600+ cph"},
+            {"Competitor": "XYZ", "Value": "500+ cph"},
+            {"Competitor": "Dexiterity", "Value": "1000 cph"},
+            {"Competitor": "Mujin", "Value": "1000+ cph"},
+            {"Competitor": "Technica", "Value": "240 full rows/hour"},
+            {"Competitor": "Anyware robotics", "Value": "1000 cph"},
+            {"Competitor": "Kawasaki", "Value": "600 cph"},
+            {"Competitor": "Yaskawa Motoman", "Value": "600+ cph"}
+        ]
+    }
+
+def save_competitor_data(data):
+    os.makedirs("data", exist_ok=True)
+    with open("data/competitors.json", "w") as f:
+        json.dump(data, f, indent=4)
+
 GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 def _get_streamlit_secret(key, default=None):
@@ -2238,12 +2261,98 @@ elif page == "Image Gallery":
 # ─────────────────────────────────────────────
 elif page == "Competitors & Research":
     st.header("Competitor Benchmarking")
-    comp_data = pd.DataFrame({
-        "Competitor": ["Boston Dynamics", "Pickle", "XYZ", "Dexiterity", "Mujin", "Technica", "Anyware robotics", "Kawasaki", "Yaskawa Motoman"] ,
-        "Unloading Rate": ["800 cph", "600+ cph", "500+ cph", "1000 cph", "1000+ cph", "240 full rows/hour", "1000 cph", "600 cph", "600+ cph"],
-        # "Takeaway": ["Fastest EOAT change", "Superior SLAM", "Low cost", "Best Vision UI", "", "", "", "", ""]
-    })
-    st.table(comp_data)
+    comp_data = load_competitor_data()
+
+    if st.session_state.role == "Admin":
+        with st.expander("➕ Add New Benchmark Topic", expanded=False):
+            new_topic = st.text_input("New Topic Name (e.g. SLAM Accuracy)")
+            new_cols = st.text_input("Column Names (comma separated)", value="Competitor, Value, Notes", help="Define columns for your new table")
+            if st.button("Create Topic"):
+                if new_topic and new_topic not in comp_data:
+                    c_list = [c.strip() for c in new_cols.split(",") if c.strip()]
+                    if not c_list:
+                        c_list = ["Competitor", "Value"]
+                    empty_row = {c: "" for c in c_list}
+                    comp_data[new_topic] = [empty_row]
+                    save_competitor_data(comp_data)
+                    st.success(f"Topic '{new_topic}' created.")
+                    st.rerun()
+                elif new_topic in comp_data:
+                    st.error("Topic already exists.")
+
+    for topic, rows in list(comp_data.items()):
+        if rows:
+            columns = list(rows[0].keys())
+        else:
+            columns = ["Competitor", "Value"]
+
+        with st.expander(f"📊 {topic}", expanded=False):
+            if st.session_state.role == "Admin":
+                st.markdown("Use the table below to **Edit Data**, **Add Rows**, or **Delete Rows** directly. Click '💾 Save Table Edits' to apply.")
+                
+                has_substance = bool(rows and any(any(str(v).strip() for v in r.values()) for r in rows))
+                if has_substance:
+                    df_topic = pd.DataFrame(rows)
+                else:
+                    df_topic = pd.DataFrame(columns=columns)
+                
+                edited_df = st.data_editor(df_topic, num_rows="dynamic", key=f"editor_{topic}", use_container_width=True)
+                
+                if st.button("💾 Save Table Edits", key=f"save_edits_{topic}"):
+                    comp_data[topic] = edited_df.fillna("").to_dict(orient="records")
+                    if not comp_data[topic]:
+                         comp_data[topic] = [{c: "" for c in columns}]
+                    save_competitor_data(comp_data)
+                    st.success("Table edits saved!")
+                    st.rerun()
+
+                st.markdown("---")
+                st.markdown("**Column Management & Admin Actions**")
+
+                col_add, col_del = st.columns(2)
+                with col_add:
+                    st.markdown("##### ➕ Add Column")
+                    new_col_name = st.text_input("New Column Name", key=f"new_col_name_{topic}")
+                    if st.button("Add Column", key=f"add_col_btn_{topic}"):
+                        if new_col_name and new_col_name not in columns:
+                            if not rows:
+                                comp_data[topic] = [{c: "" for c in columns + [new_col_name]}]
+                            else:
+                                for r in comp_data[topic]:
+                                    r[new_col_name] = ""
+                            save_competitor_data(comp_data)
+                            st.rerun()
+
+                with col_del:
+                    st.markdown("##### ❌ Delete Column")
+                    col_to_delete = st.selectbox("Select Column to Delete", columns, key=f"del_col_sel_{topic}")
+                    if st.button("Delete Column", key=f"del_col_btn_{topic}"):
+                        if len(columns) <= 1:
+                            st.error("Cannot delete the last column.")
+                        else:
+                            for r in comp_data[topic]:
+                                if col_to_delete in r:
+                                    del r[col_to_delete]
+                            save_competitor_data(comp_data)
+                            st.rerun()
+
+                st.divider()
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button(f"🗑️ Delete Topic '{topic}'", key=f"del_topic_{topic}", type="primary"):
+                    del comp_data[topic]
+                    save_competitor_data(comp_data)
+                    st.rerun()
+            else:
+                if rows:
+                    display_rows = [r for r in rows if any(str(v).strip() for v in r.values())]
+                    if display_rows:
+                        df_topic = pd.DataFrame(display_rows)
+                        st.table(df_topic)
+                    else:
+                        st.info("No data added for this topic yet (Template ready).")
+                else:
+                    st.info("No data added for this topic yet.")
 
 
 
