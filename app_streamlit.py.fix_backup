@@ -1004,7 +1004,6 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
                 save_planned_milestones(pm_data)
                 st.session_state[f"cm_edit_mode_{mil_id}"] = False
                 st.success(f"Saved {mil_id}.")
-                st.rerun()
         if save_col2.button("Cancel", key=f"cm_cancel_{mil_id}"):
             st.session_state[f"cm_edit_mode_{mil_id}"] = False
             st.rerun()
@@ -1052,7 +1051,6 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
                     t_info["topic"] = edit_topic
                     save_planned_milestones(pm_data)
                     st.success(f"Saved {t_id}.")
-                    st.rerun()
             if save_col2.button("🗑️ Delete Task", key=f"ct_delete_{mil_id}_{t_id}"):
                 del mil_info["tasks"][t_id]
                 save_planned_milestones(pm_data)
@@ -1689,7 +1687,6 @@ elif page == "Tasks & Milestones":
                             
                 save_data(df)
                 st.success(f"Successfully integrated '{t_name}' under '{actual_topic}' in '{actual_proj}'!")
-                st.rerun()
 
     st.divider()
 
@@ -1964,7 +1961,6 @@ elif page == "Tasks & Milestones":
                                 
                                 st.session_state[edit_key] = False
                                 st.success("Network state formally updated!")
-                                st.rerun()
                         if cancel_col.button("✖ Abort", key=f"cancel_{idx}"):
                             st.session_state[edit_key] = False
                             st.rerun()
@@ -2120,7 +2116,6 @@ elif page == "Planned Milestones":
                         del st.session_state[k]
 
                 st.success(f"Added {milestone_name}")
-                st.rerun()
 
     st.divider()
     
@@ -2207,7 +2202,6 @@ elif page == "Planned Milestones":
                             del mil_info["topic"]
                         save_planned_milestones(pm_data)
                         st.session_state[edit_m_key] = False
-                        st.rerun()
                 if scol2.button("❌", key=f"cm_{mil_id}"):
                     st.session_state[edit_m_key] = False
                     st.rerun()
@@ -2306,7 +2300,6 @@ elif page == "Planned Milestones":
                                     t_info["to_date"] = et_e.strftime("%Y-%m-%d")
                                     save_planned_milestones(pm_data)
                                     st.session_state[edit_t_key] = False
-                                    st.rerun()
                             if esc2.button("❌", key=f"cst_{mil_id}_{t_id}"):
                                 st.session_state[edit_t_key] = False
                                 st.rerun()
@@ -2378,7 +2371,6 @@ elif page == "Planned Milestones":
                                 del st.session_state[k]
 
                         st.success(f"Added {task_name} to {mil_id}")
-                        st.rerun()
 
             # --- Errors / New Tasks ---
             with st.expander(f"⚠️ Report Errors / Additional Tasks for {mil_id}", expanded=False):
@@ -2413,7 +2405,6 @@ elif page == "Planned Milestones":
                                     del st.session_state[k]
 
                             st.success(f"Logged issue to {err_task}. {err_hrs} hrs added to task and milestone totals.")
-                            st.rerun()
                         else:
                             st.error("Please provide an issue description.")
             st.divider()
@@ -2452,7 +2443,6 @@ elif page == "Image Gallery":
                 st.success(f"Success! Image locked to '{up_proj} : {up_topic}'.")
                 if drive_error:
                     st.warning(f"Image saved locally, but Google Drive sync failed: {drive_error}")
-                st.rerun()
             else:
                 st.error("Please load a file first.")
 
@@ -2507,7 +2497,6 @@ elif page == "Competitors & Research":
                     comp_data[new_topic] = [empty_row]
                     save_competitor_data(comp_data)
                     st.success(f"Topic '{new_topic}' created.")
-                    st.rerun()
                 elif new_topic in comp_data:
                     st.error("Topic already exists.")
 
@@ -2535,7 +2524,6 @@ elif page == "Competitors & Research":
                          comp_data[topic] = [{c: "" for c in columns}]
                     save_competitor_data(comp_data)
                     st.success("Table edits saved!")
-                    st.rerun()
 
                 st.markdown("---")
                 st.markdown("**Column Management & Admin Actions**")
@@ -2639,7 +2627,6 @@ elif page == "Document Drive":
                 st.warning("Some files were saved locally but not synced to Google Drive: " + " | ".join(drive_failures[:3]))
             else:
                 st.success(f"✅ Successfully uploaded {len(uploaded_files)} file(s) to {t_proj} > {t_topic} on Google Drive.")
-            st.rerun()
 
     st.markdown("### 2. Attach URL / Drive Link")
     u_col1, u_col2 = st.columns([2, 3])
@@ -2650,7 +2637,6 @@ elif page == "Document Drive":
             topic_meta["urls"].append({"url": new_url, "note": new_url_note})
             save_drive_metadata(drive_meta)
             st.success("Link attached!")
-            st.rerun()
         else:
             st.error("Please enter a URL first.")
 
@@ -2770,4 +2756,3 @@ elif page == "Document Drive":
                         st.rerun()
         else:
             st.info("No files uploaded for this topic yet.")
-
