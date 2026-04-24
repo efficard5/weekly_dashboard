@@ -1382,13 +1382,21 @@ if page == "Dashboard":
     edit_notes = col_tgl.toggle("📝 Enable Grid Editor", value=False)
     
     notes_db = load_notes()
-    if selected_project not in notes_db:
-        notes_db[selected_project] = {
+    
+    # Unified notes lookup across legacy name candidates
+    actual_project_id = selected_project
+    for candidate in get_project_storage_candidates(selected_project):
+        if candidate in notes_db:
+            actual_project_id = candidate
+            break
+
+    if actual_project_id not in notes_db:
+        notes_db[actual_project_id] = {
             "Topics": {},
             "Project_Issues": "**Critical:** AGV Mapping error in Zone B\n**Low:** Vacuum suction cup wear",
             "Project_Plans": "- 2026 Q3: Full Site Expansion\n- Multi-fleet cloud sync"
         }
-    proj_notes = notes_db[selected_project]
+    proj_notes = notes_db[actual_project_id]
 
     col_l, col_r = st.columns([3, 1])
     with col_l:
