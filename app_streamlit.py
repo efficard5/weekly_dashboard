@@ -1030,11 +1030,15 @@ with st.sidebar:
     with st.expander("🔄 Data Sync Settings"):
         if st.button("🔄 Refresh from Cloud"):
             with st.spinner("Refreshing..."):
-                if pull_backend_data_from_drive():
-                    st.success("Successfully refreshed from Cloud.")
-                    st.rerun()
-                else:
-                    st.error("Refresh failed.")
+                try:
+                    ok = pull_backend_data_from_drive()
+                    if ok:
+                        st.success("Successfully refreshed from Cloud.")
+                        st.rerun()
+                    else:
+                        st.error("Refresh failed. Check the sidebar for details.")
+                except Exception as e:
+                    st.error(f"Sync Button Error: {e}")
         
         # Display last updated timestamp for local storage
         if os.path.exists("data/tasks.xlsx"):
