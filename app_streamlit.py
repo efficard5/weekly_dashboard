@@ -330,11 +330,18 @@ def get_google_drive_service():
 
         credentials = _load_google_drive_credentials()
         if not credentials:
+            if "last_drive_error" not in st.session_state:
+                st.session_state.last_drive_error = "No credentials could be loaded."
             return None
 
-        return build("drive", "v3", credentials=credentials)
+        service = build("drive", "v3", credentials=credentials)
+        # Clear errors if successful
+        st.session_state.last_drive_error = None
+        return service
 
     except Exception as e:
+        import traceback
+        st.session_state.last_drive_error = f"{type(e).__name__}: {str(e)}"
         st.error(f"Google Drive error: {e}")
         return None
 
@@ -1030,12 +1037,16 @@ if not google_drive_is_ready():
     st.sidebar.error("⚠️ Drive Disconnected")
     with st.expander("🛠️ Google Drive Debug Info", expanded=True):
         st.error("Google Drive is not connected. This is why 'Refresh' is failing.")
+        
+        last_err = st.session_state.get("last_drive_error")
+        if last_err:
+            st.warning(f"Technical Error: {last_err}")
+            
         creds = _load_google_drive_credentials()
         if creds is None:
             st.warning("Reason: No valid credentials found. Please check your Streamlit Secrets.")
-            st.info("Ensure you have [service_account] block in your Secrets.")
         else:
-            st.success("Credentials loaded, but service initialization failed.")
+            st.success("Credentials (Service Account) were parsed, but could not connect.")
 else:
     st.sidebar.success("✅ Drive Connected")
 
