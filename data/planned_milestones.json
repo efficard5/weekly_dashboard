@@ -4,7 +4,7 @@
         "time_needed": 0.0,
         "from_date": "2026-04-13",
         "to_date": "2026-04-19",
-        "project_context": "Truck Unloading Project",
+        "project_context": "R&D Project",
         "progress_increase": {
             "AGV": 0.0,
             "Container": 0.0,
@@ -22,7 +22,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-13",
                 "to_date": "2026-04-13",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []
@@ -32,7 +32,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-14",
                 "to_date": "2026-04-14",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []
@@ -42,7 +42,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-14",
                 "to_date": "2026-04-15",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []
@@ -52,7 +52,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-15",
                 "to_date": "2026-04-15",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []
@@ -62,7 +62,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-15",
                 "to_date": "2026-04-16",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []
@@ -72,7 +72,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-16",
                 "to_date": "2026-04-17",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []
@@ -82,7 +82,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-17",
                 "to_date": "2026-04-17",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []
@@ -92,7 +92,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-18",
                 "to_date": "2026-04-18",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []
@@ -102,7 +102,7 @@
                 "time_needed": 0.0,
                 "from_date": "2026-04-18",
                 "to_date": "2026-04-18",
-                "project": "Truck Unloading Project",
+                "project": "R&D Project",
                 "topic": "",
                 "completed": false,
                 "errors": []

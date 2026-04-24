@@ -277,6 +277,9 @@ def _load_google_drive_credentials():
     if creds and creds.valid:
         return creds
 
+    # Token existed but was invalid/expired and couldn't be refreshed automatically.
+    # We should continue to Service Account fallback instead of potentially hanging.
+
     if service_account is None:
         return None
 
@@ -457,57 +460,109 @@ def upload_bytes_to_drive(path_parts, file_name, file_bytes, mime_type=None):
 def sync_data_file_to_drive(local_path):
     """Upload a specific local data file to the 'System Data' folder on Drive"""
     if not google_drive_is_ready():
-        return
+        return False
     try:
         import os
         if not os.path.exists(local_path):
-            return
+            return False
         file_name = os.path.basename(local_path)
         with open(local_path, "rb") as f:
-            upload_bytes_to_drive(["System Data"], file_name, f.read())
-    except:
-        pass
+            drive_file = upload_bytes_to_drive(["System Data"], file_name, f.read())
+            # Store sync metadata in session state to prevent immediate re-pull
+            if "last_sync" not in st.session_state:
+                st.session_state.last_sync = {}
+            st.session_state.last_sync[local_path] = drive_file.get("id")
+            return True
+    except Exception as e:
+        st.sidebar.error(f"Failed to sync {local_path} to Drive: {e}")
+        return False
+
 
 
 def pull_backend_data_from_drive():
-    """Download all core data files from Drive to local data/ folder on startup"""
+    """Download all core data files from Drive to local data/ folder on startup.
+    Includes backup logic and basic conflict avoidance."""
     if not google_drive_is_ready():
-        return
+        return False
     
     service = get_google_drive_service()
     parent_id = ensure_drive_path(["System Data"])
     if not parent_id:
-        return
+        return False
         
     try:
         results = service.files().list(
             q=f"'{parent_id}' in parents and trashed = false",
-            fields="files(id, name)"
+            fields="files(id, name, modifiedTime)"
         ).execute()
         files = results.get("files", [])
         
         import io
+        import shutil
+        from datetime import datetime, timezone
         if not MediaIoBaseDownload:
-            return
+            return False
             
         os.makedirs("data", exist_ok=True)
+        os.makedirs("data/backups", exist_ok=True)
+        
+        success_count = 0
         for f in files:
             file_id = f['id']
             file_name = f['name']
             local_path = os.path.join("data", file_name)
             
-            request = service.files().get_media(fileId=file_id)
-            fh = io.BytesIO()
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while done is False:
-                status, done = downloader.next_chunk()
-            
-            with open(local_path, "wb") as local_file:
-                local_file.write(fh.getvalue())
+            # 1. Conflict Prevention (Avoid overwriting newer local work)
+            should_download = True
+            if os.path.exists(local_path):
+                # Ensure we use UTC for comparison to match Drive's timezone
+                local_timestamp = os.path.getmtime(local_path)
+                local_mtime = datetime.fromtimestamp(local_timestamp, tz=timezone.utc)
+                
+                drive_mtime_str = f.get('modifiedTime', '').replace('Z', '+00:00')
+                try:
+                    drive_mtime = datetime.fromisoformat(drive_mtime_str)
+                    
+                    # If local is newer by more than 2 seconds, skip download to avoid losing work
+                    if (local_mtime - drive_mtime).total_seconds() > 2:
+                        should_download = False
+                        # We still back up just in case, but we don't overwrite
+                        backup_name = f"{file_name}.local_newer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
+                        shutil.copy2(local_path, os.path.join("data/backups", backup_name))
+                        continue
+                except:
+                    pass
+
+            # 2. Download the file
+            try:
+                request = service.files().get_media(fileId=file_id)
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while done is False:
+                    status, done = downloader.next_chunk()
+                
+                # Backup existing file before physical overwrite
+                if os.path.exists(local_path):
+                    backup_path = local_path + ".prev"
+                    shutil.copy2(local_path, backup_path)
+
+                with open(local_path, "wb") as local_file:
+                    local_file.write(fh.getvalue())
+                
+                # Set local mtime to match Drive mtime so they are in sync
+                if 'drive_mtime' in locals():
+                    os.utime(local_path, (drive_mtime.timestamp(), drive_mtime.timestamp()))
+                
+                success_count += 1
+            except Exception as e:
+                st.sidebar.warning(f"Failed to download {file_name}: {e}")
+        
+        return success_count > 0
     except Exception as e:
-        # Silently fail if Drive is not empty but no sync possible
-        pass
+        st.sidebar.error(f"Drive pull error: {e}")
+        return False
+
 
 
 def save_uploaded_file(file_obj, local_path, drive_path_parts=None):
@@ -938,18 +993,34 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
             if save_col2.button("🗑️ Delete Task", key=f"ct_delete_{mil_id}_{t_id}"):
                 del mil_info["tasks"][t_id]
                 save_planned_milestones(pm_data)
-                st.rerun()
-
 
 # --- INITIAL SYNC ---
 if "data_synced" not in st.session_state:
-    pull_backend_data_from_drive()
+    try:
+        pull_backend_data_from_drive()
+    except:
+        pass
     st.session_state.data_synced = True
+
+with st.sidebar:
+    st.divider()
+    st.subheader("🔄 Data Sync Settings")
+    if st.button("Refresh from Cloud", help="Download the latest data from Google Drive"):
+        if pull_backend_data_from_drive():
+            st.success("Data refreshed from Drive.")
+            st.rerun()
+        else:
+            st.error("Refresh failed.")
+    
+    try:
+        if os.path.exists("data/planned_milestones.json"):
+            mtime = os.path.getmtime("data/planned_milestones.json")
+            st.caption(f"Local storage last updated: {datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+    except:
+        pass
 
 df = load_data()
 
-# --- DYNAMIC PROJECTS & TOPICS ---
-# Isolate Projects
 base_projects = ["Truck Unloading Project"]
 saved_projects = [str(p) for p in df['Project'].dropna().unique() if str(p).strip() != ""]
 projects = list(dict.fromkeys(base_projects + saved_projects))
