@@ -104,18 +104,23 @@ components.html(
 @st.cache_data
 def load_data():
     file_path = "data/tasks.xlsx"
+    legacy_project_names = {
+        "Default Project": "Truck Unloading Project",
+        "R&D Project": "Truck Unloading Project",
+    }
     required_cols = [
         "Project", "Topic", "Task Name", "Start Date", "End Date", 
         "Completion %", "Status", "Employee", "Week", "Hidden",
         "Milestone_Text", "Milestone_Role", "Milestone_Author_Name"
     ]
+    
     if os.path.exists(file_path):
         df = pd.read_excel(file_path)
         needs_save = False
         # Consolidate column defaults and type enforcement into a single loop
         defaults = {
             "Hidden": False, "Completion %": 0, "Week": 1, 
-            "Project": "R&D Project", "Employee": "Unassigned",
+            "Project": "Truck Unloading Project", "Employee": "Unassigned",
             "Milestone_Role": "None"
         }
         for col in required_cols:
@@ -123,6 +128,11 @@ def load_data():
                 df[col] = defaults.get(col, "")
                 needs_save = True
         
+        if "Project" in df.columns:
+            normalized_projects = df["Project"].replace(legacy_project_names)
+            if not normalized_projects.equals(df["Project"]):
+                df["Project"] = normalized_projects
+                needs_save = True
         df["Hidden"] = df["Hidden"].fillna(False).astype(bool)
         if needs_save:
             os.makedirs("data", exist_ok=True)
@@ -134,7 +144,6 @@ def save_data(data_df):
     os.makedirs("data", exist_ok=True)
     data_df.to_excel("data/tasks.xlsx", index=False)
     sync_data_file_to_drive("data/tasks.xlsx")
-    log_activity("Updated tasks.xlsx")
     st.cache_data.clear()  # Ensure the next load reflects the newly saved data
 
 def load_notes():
@@ -148,7 +157,6 @@ def save_notes(notes):
     with open("data/project_notes.json", "w") as f:
         json.dump(notes, f, indent=4)
     sync_data_file_to_drive("data/project_notes.json")
-    log_activity("Updated project_notes.json")
 
 def load_planned_milestones():
     if os.path.exists("data/planned_milestones.json"):
@@ -161,7 +169,6 @@ def save_planned_milestones(milestones):
     with open("data/planned_milestones.json", "w") as f:
         json.dump(milestones, f, indent=4)
     sync_data_file_to_drive("data/planned_milestones.json")
-    log_activity("Updated planned_milestones.json")
 
 def load_drive_metadata():
     if os.path.exists("data/drive_metadata.json"):
@@ -174,7 +181,6 @@ def save_drive_metadata(data):
     with open("data/drive_metadata.json", "w") as f:
         json.dump(data, f, indent=4)
     sync_data_file_to_drive("data/drive_metadata.json")
-    log_activity("Updated drive_metadata.json")
 
 def load_competitor_data():
     file_path = "data/competitors.xlsx"
@@ -214,7 +220,6 @@ def save_competitor_data(data):
                         pd.DataFrame(rows).to_excel(writer, sheet_name=safe_sheet, index=False)
                         
         sync_data_file_to_drive(file_path)
-        log_activity("Updated competitors.xlsx")
     except Exception as e:
         import streamlit as st
         st.error(f"Failed to save excel: {e}")
@@ -249,77 +254,66 @@ def _load_google_drive_credentials():
 
     if creds and creds.expired and creds.refresh_token:
         try:
-            from google.auth.transport.requests import Request
             creds.refresh(Request())
             with open('token.json', 'w') as token:
                 token.write(creds.to_json())
-        except Exception as e:
-            print(f"Token refresh failed: {e}")
+        except Exception:
             creds = None
-            # If token is revoked/invalid, rename it to prevent further attempts
-            if os.path.exists('token.json'):
+
+    if not creds or not creds.valid:
+        if os.path.exists('credentials.json'):
+            try:
+                from google_auth_oauthlib.flow import InstalledAppFlow
+                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
+                creds = flow.run_local_server(port=0)
+                with open('token.json', 'w') as token:
+                    token.write(creds.to_json())
+            except Exception as e:
                 try:
-                    os.rename('token.json', 'token.json.bak')
+                    st.sidebar.error(f"OAuth Flow error: {e}")
                 except:
                     pass
 
     if creds and creds.valid:
         return creds
 
-    # Token existed but was invalid/expired and couldn't be refreshed automatically.
-    # We should prefer Service Account fallback before trying interactive OAuth.
-    
-    if service_account is not None:
-        # 1. Check file path (optional)
-        service_account_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
-        if service_account_path and os.path.exists(service_account_path):
-            try:
-                return service_account.Credentials.from_service_account_file(
-                    service_account_path,
-                    scopes=GOOGLE_DRIVE_SCOPES
-                )
-            except:
-                pass
+    if service_account is None:
+        return None
 
-        # 2. Check JSON string (optional)
-        service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-        if service_account_json:
-            try:
-                return service_account.Credentials.from_service_account_info(
-                    json.loads(service_account_json),
-                    scopes=GOOGLE_DRIVE_SCOPES
-                )
-            except Exception:
-                pass
+    # 1. Check file path (optional)
+    service_account_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+    if service_account_path and os.path.exists(service_account_path):
+        return service_account.Credentials.from_service_account_file(
+            service_account_path,
+            scopes=GOOGLE_DRIVE_SCOPES
+        )
 
-        # 3. Read from Streamlit secrets
+    # 2. Check JSON string (optional)
+    service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if service_account_json:
         try:
-            secret_account = st.secrets.get("service_account") or st.secrets.get("gdrive_service_account")
-            if secret_account:
-                return service_account.Credentials.from_service_account_info(
-                    dict(secret_account),
-                    scopes=GOOGLE_DRIVE_SCOPES
-                )
-        except Exception as e:
-            try:
-                st.sidebar.error(f"Secrets error: {e}")
-            except:
-                pass
+            return service_account.Credentials.from_service_account_info(
+                json.loads(service_account_json),
+                scopes=GOOGLE_DRIVE_SCOPES
+            )
+        except Exception:
+            pass
 
-    # If Service Account is not available, try OAuth Flow as a last resort
-    if os.path.exists('credentials.json'):
+    # 3. Read from Streamlit secrets
+    try:
+        secret_account = st.secrets.get("service_account") or st.secrets.get("gdrive_service_account")
+
+        if secret_account:
+            return service_account.Credentials.from_service_account_info(
+                dict(secret_account),
+                scopes=GOOGLE_DRIVE_SCOPES
+            )
+    except Exception as e:
         try:
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
-            creds = flow.run_local_server(port=0)
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
-            return creds
-        except Exception as e:
-            try:
-                st.sidebar.error(f"OAuth Flow error: {e}")
-            except:
-                pass
+            st.sidebar.error(f"Secrets error: {e}")
+        except:
+            pass
+        return None
 
     return None
 
@@ -460,135 +454,60 @@ def upload_bytes_to_drive(path_parts, file_name, file_bytes, mime_type=None):
     return file_obj
 
 
-def log_activity(message):
-    """Log an activity message locally and to Drive."""
-    try:
-        os.makedirs("data", exist_ok=True)
-        log_path = "data/daily_activity.log"
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_entry = f"[{timestamp}] {message}\n"
-        
-        with open(log_path, "a") as f:
-            f.write(log_entry)
-        
-        # Sync the log to Drive (System Data folder)
-        sync_data_file_to_drive(log_path)
-    except Exception as e:
-        print(f"Logging error: {e}")
-
 def sync_data_file_to_drive(local_path):
     """Upload a specific local data file to the 'System Data' folder on Drive"""
     if not google_drive_is_ready():
-        return False
+        return
     try:
         import os
         if not os.path.exists(local_path):
-            return False
+            return
         file_name = os.path.basename(local_path)
         with open(local_path, "rb") as f:
-            drive_file = upload_bytes_to_drive(["System Data"], file_name, f.read())
-            if drive_file:
-                # Store sync metadata
-                if "last_sync" not in st.session_state:
-                    st.session_state.last_sync = {}
-                st.session_state.last_sync[local_path] = drive_file.get("id")
-                return True
-        return False
-    except Exception as e:
-        st.sidebar.error(f"Failed to sync {local_path} to Drive: {e}")
-        return False
-
+            upload_bytes_to_drive(["System Data"], file_name, f.read())
+    except:
+        pass
 
 
 def pull_backend_data_from_drive():
-    """Download all core data files from Drive to local data/ folder on startup.
-    Includes backup logic and basic conflict avoidance."""
+    """Download all core data files from Drive to local data/ folder on startup"""
     if not google_drive_is_ready():
-        log_activity("Sync check: Drive not ready.")
-        return False
+        return
     
     service = get_google_drive_service()
     parent_id = ensure_drive_path(["System Data"])
     if not parent_id:
-        st.sidebar.error("Could not find or create 'System Data' folder on Drive.")
-        return False
+        return
         
     try:
         results = service.files().list(
             q=f"'{parent_id}' in parents and trashed = false",
-            fields="files(id, name, modifiedTime)"
+            fields="files(id, name)"
         ).execute()
         files = results.get("files", [])
         
         import io
-        import shutil
-        from datetime import datetime, timezone
         if not MediaIoBaseDownload:
-            return False
+            return
             
         os.makedirs("data", exist_ok=True)
-        
-        success_count = 0
         for f in files:
             file_id = f['id']
             file_name = f['name']
             local_path = os.path.join("data", file_name)
             
-            # Critical Conflict Prevention for Streamlit Cloud:
-            # We trust Drive more on initial pull if the local file looks like a fresh clone.
-            should_download = True
-            if os.path.exists(local_path):
-                local_mtime = datetime.fromtimestamp(os.path.getmtime(local_path), tz=timezone.utc)
-                drive_mtime_str = f.get('modifiedTime', '').replace('Z', '+00:00')
-                try:
-                    drive_mtime = datetime.fromisoformat(drive_mtime_str)
-                    
-                    # Logic: If local is MUCH newer (more than 5 mins), assume it was saved in THIS session.
-                    # Otherwise, IF Drive is newer OR local looks like original repo file, download.
-                    now = datetime.now(timezone.utc)
-                    age_seconds = (now - local_mtime).total_seconds()
-                    
-                    if age_seconds < 300: # Saved within last 5 minutes
-                        if (local_mtime - drive_mtime).total_seconds() > 2:
-                            should_download = False
-                except:
-                    pass
-
-            if should_download:
-                try:
-                    request = service.files().get_media(fileId=file_id)
-                    fh = io.BytesIO()
-                    downloader = MediaIoBaseDownload(fh, request)
-                    done = False
-                    while done is False:
-                        status, done = downloader.next_chunk()
-                    
-                    # Store backup
-                    if os.path.exists(local_path):
-                        shutil.copy2(local_path, local_path + ".bak")
-
-                    with open(local_path, "wb") as local_file:
-                        local_file.write(fh.getvalue())
-                    
-                    # Set local mtime to match Drive
-                    try:
-                        drive_ts = datetime.fromisoformat(f.get('modifiedTime', '').replace('Z', '+00:00')).timestamp()
-                        os.utime(local_path, (drive_ts, drive_ts))
-                    except:
-                        pass
-                    
-                    success_count += 1
-                except Exception as e:
-                    st.sidebar.warning(f"Failed to download {file_name}: {e}")
-        
-        log_activity(f"Pull completed: {success_count} files updated.")
-        return True
+            request = service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+            
+            with open(local_path, "wb") as local_file:
+                local_file.write(fh.getvalue())
     except Exception as e:
-        st.sidebar.error(f"Drive pull error: {e}")
-        if hasattr(get_google_drive_service, "clear"):
-            get_google_drive_service.clear()
-        return False
-
+        # Silently fail if Drive is not empty but no sync possible
+        pass
 
 
 def save_uploaded_file(file_obj, local_path, drive_path_parts=None):
@@ -646,14 +565,6 @@ def get_project_storage_candidates(project_name):
     if not project_name:
         return []
     return [project_name] + LEGACY_PROJECT_NAMES.get(project_name, [])
-
-def is_project_match(p1, p2):
-    p1 = str(p1 or "").strip()
-    p2 = str(p2 or "").strip()
-    if p1 == p2:
-        return True
-    # Check aliases
-    return p2 in get_project_storage_candidates(p1) or p1 in get_project_storage_candidates(p2)
 
 def get_existing_topic_dir(project_name, topic_name):
     for candidate_project in get_project_storage_candidates(project_name):
@@ -816,7 +727,7 @@ def get_planned_topic_adjustments(project_name, milestones):
 
     for mil_info in milestones.values():
         milestone_project = str(mil_info.get("project_context", "")).strip()
-        if not is_project_match(milestone_project, project_name):
+        if milestone_project != project_name:
             continue
         if not bool(mil_info.get("completed", False)):
             continue
@@ -881,7 +792,7 @@ def get_completed_milestone_total(project_name, milestones, topic_name="All Topi
     for mil_info in milestones.values():
         if not bool(mil_info.get("completed", False)):
             continue
-        if not is_project_match(mil_info.get("project_context", ""), project_name):
+        if str(mil_info.get("project_context", "")).strip() != str(project_name).strip():
             continue
         milestone_topic = get_milestone_topic(mil_info)
         if topic_name != "All Topics" and milestone_topic not in [topic_name, "All Topics"]:
@@ -1027,38 +938,18 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
             if save_col2.button("🗑️ Delete Task", key=f"ct_delete_{mil_id}_{t_id}"):
                 del mil_info["tasks"][t_id]
                 save_planned_milestones(pm_data)
+                st.rerun()
+
 
 # --- INITIAL SYNC ---
 if "data_synced" not in st.session_state:
-    try:
-        pull_backend_data_from_drive()
-    except:
-        pass
+    pull_backend_data_from_drive()
     st.session_state.data_synced = True
-
-with st.sidebar:
-    st.divider()
-    st.subheader("🔄 Data Sync Settings")
-    if st.button("Refresh from Cloud", help="Download the latest data from Google Drive"):
-        if pull_backend_data_from_drive():
-            st.success("Data refreshed from Drive.")
-            st.rerun()
-        else:
-            st.error("Refresh failed.")
-    
-    try:
-        data_file = "data/planned_milestones.json"
-        if os.path.exists(data_file):
-            mtime = os.path.getmtime(data_file)
-            from datetime import timezone
-            # Try to show in local time if possible
-            last_updated = datetime.fromtimestamp(mtime)
-            st.caption(f"Local storage last updated: {last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
-    except:
-        pass
 
 df = load_data()
 
+# --- DYNAMIC PROJECTS & TOPICS ---
+# Isolate Projects
 base_projects = ["Truck Unloading Project"]
 saved_projects = [str(p) for p in df['Project'].dropna().unique() if str(p).strip() != ""]
 projects = list(dict.fromkeys(base_projects + saved_projects))
@@ -1382,21 +1273,13 @@ if page == "Dashboard":
     edit_notes = col_tgl.toggle("📝 Enable Grid Editor", value=False)
     
     notes_db = load_notes()
-    
-    # Unified notes lookup across legacy name candidates
-    actual_project_id = selected_project
-    for candidate in get_project_storage_candidates(selected_project):
-        if candidate in notes_db:
-            actual_project_id = candidate
-            break
-
-    if actual_project_id not in notes_db:
-        notes_db[actual_project_id] = {
+    if selected_project not in notes_db:
+        notes_db[selected_project] = {
             "Topics": {},
             "Project_Issues": "**Critical:** AGV Mapping error in Zone B\n**Low:** Vacuum suction cup wear",
             "Project_Plans": "- 2026 Q3: Full Site Expansion\n- Multi-fleet cloud sync"
         }
-    proj_notes = notes_db[actual_project_id]
+    proj_notes = notes_db[selected_project]
 
     col_l, col_r = st.columns([3, 1])
     with col_l:

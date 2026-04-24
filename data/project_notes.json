@@ -1,5 +1,5 @@
 {
-    "R&D Project": {
+    "Truck Unloading Project": {
         "Topics": {
             "Vision System": {
                 "Major": "--> Camera selection.\n--> Other technology tested\n--> Camera placement\n--> Camera calibration\n--> Processing time optimisation\n--> Code for X,Y,Z Co-ordinates\n--> Code for w,p,r Co-ordinates\n--> Bounding Box Logic Created\n--> Center Point of the Box Logic Created\n--> Capture Trigger Logic Created\n--> Co-ordinate send Logic Created\n--> Segmentation Logic Created\n--> Length & Width Logic created\n--> Rows & Columns Logic created\n--> Trail Taken with X,Y,Z Co-ordinates in Vision\n--> PLC Logic For X,Y,Z and Capture Trigger\n--> Height & Width Logic Created\n\n",
