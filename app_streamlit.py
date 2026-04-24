@@ -254,11 +254,19 @@ def _load_google_drive_credentials():
 
     if creds and creds.expired and creds.refresh_token:
         try:
+            from google.auth.transport.requests import Request
             creds.refresh(Request())
             with open('token.json', 'w') as token:
                 token.write(creds.to_json())
-        except Exception:
+        except Exception as e:
+            print(f"Token refresh failed: {e}")
             creds = None
+            # If token is revoked/invalid, rename it to prevent further attempts
+            if os.path.exists('token.json'):
+                try:
+                    os.rename('token.json', 'token.json.bak')
+                except:
+                    pass
 
     if not creds or not creds.valid:
         if os.path.exists('credentials.json'):
@@ -558,9 +566,13 @@ def pull_backend_data_from_drive():
             except Exception as e:
                 st.sidebar.warning(f"Failed to download {file_name}: {e}")
         
-        return success_count > 0
+        # Return True if we at least reached this point without a fatal error
+        return True
     except Exception as e:
         st.sidebar.error(f"Drive pull error: {e}")
+        # Clear the service cache so it tries fresh next time
+        if hasattr(get_google_drive_service, "clear"):
+            get_google_drive_service.clear()
         return False
 
 
@@ -1013,9 +1025,13 @@ with st.sidebar:
             st.error("Refresh failed.")
     
     try:
-        if os.path.exists("data/planned_milestones.json"):
-            mtime = os.path.getmtime("data/planned_milestones.json")
-            st.caption(f"Local storage last updated: {datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+        data_file = "data/planned_milestones.json"
+        if os.path.exists(data_file):
+            mtime = os.path.getmtime(data_file)
+            from datetime import timezone
+            # Try to show in local time if possible
+            last_updated = datetime.fromtimestamp(mtime)
+            st.caption(f"Local storage last updated: {last_updated.strftime('%Y-%m-%d %H:%M:%S')}")
     except:
         pass
 
