@@ -144,6 +144,7 @@ def save_data(data_df):
     os.makedirs("data", exist_ok=True)
     data_df.to_excel("data/tasks.xlsx", index=False)
     sync_data_file_to_drive("data/tasks.xlsx")
+    log_activity("Updated tasks.xlsx")
     st.cache_data.clear()  # Ensure the next load reflects the newly saved data
 
 def load_notes():
@@ -157,6 +158,7 @@ def save_notes(notes):
     with open("data/project_notes.json", "w") as f:
         json.dump(notes, f, indent=4)
     sync_data_file_to_drive("data/project_notes.json")
+    log_activity("Updated project_notes.json")
 
 def load_planned_milestones():
     if os.path.exists("data/planned_milestones.json"):
@@ -169,6 +171,7 @@ def save_planned_milestones(milestones):
     with open("data/planned_milestones.json", "w") as f:
         json.dump(milestones, f, indent=4)
     sync_data_file_to_drive("data/planned_milestones.json")
+    log_activity("Updated planned_milestones.json")
 
 def load_drive_metadata():
     if os.path.exists("data/drive_metadata.json"):
@@ -181,6 +184,7 @@ def save_drive_metadata(data):
     with open("data/drive_metadata.json", "w") as f:
         json.dump(data, f, indent=4)
     sync_data_file_to_drive("data/drive_metadata.json")
+    log_activity("Updated drive_metadata.json")
 
 def load_competitor_data():
     file_path = "data/competitors.xlsx"
@@ -220,6 +224,7 @@ def save_competitor_data(data):
                         pd.DataFrame(rows).to_excel(writer, sheet_name=safe_sheet, index=False)
                         
         sync_data_file_to_drive(file_path)
+        log_activity("Updated competitors.xlsx")
     except Exception as e:
         import streamlit as st
         st.error(f"Failed to save excel: {e}")
@@ -465,6 +470,22 @@ def upload_bytes_to_drive(path_parts, file_name, file_bytes, mime_type=None):
     return file_obj
 
 
+def log_activity(message):
+    """Log an activity message locally and to Drive."""
+    try:
+        os.makedirs("data", exist_ok=True)
+        log_path = "data/daily_activity.log"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {message}\n"
+        
+        with open(log_path, "a") as f:
+            f.write(log_entry)
+        
+        # Sync the log to Drive (System Data folder)
+        sync_data_file_to_drive(log_path)
+    except Exception as e:
+        print(f"Logging error: {e}")
+
 def sync_data_file_to_drive(local_path):
     """Upload a specific local data file to the 'System Data' folder on Drive"""
     if not google_drive_is_ready():
@@ -476,11 +497,13 @@ def sync_data_file_to_drive(local_path):
         file_name = os.path.basename(local_path)
         with open(local_path, "rb") as f:
             drive_file = upload_bytes_to_drive(["System Data"], file_name, f.read())
-            # Store sync metadata in session state to prevent immediate re-pull
-            if "last_sync" not in st.session_state:
-                st.session_state.last_sync = {}
-            st.session_state.last_sync[local_path] = drive_file.get("id")
-            return True
+            if drive_file:
+                # Store sync metadata
+                if "last_sync" not in st.session_state:
+                    st.session_state.last_sync = {}
+                st.session_state.last_sync[local_path] = drive_file.get("id")
+                return True
+        return False
     except Exception as e:
         st.sidebar.error(f"Failed to sync {local_path} to Drive: {e}")
         return False
@@ -491,11 +514,13 @@ def pull_backend_data_from_drive():
     """Download all core data files from Drive to local data/ folder on startup.
     Includes backup logic and basic conflict avoidance."""
     if not google_drive_is_ready():
+        log_activity("Sync check: Drive not ready.")
         return False
     
     service = get_google_drive_service()
     parent_id = ensure_drive_path(["System Data"])
     if not parent_id:
+        st.sidebar.error("Could not find or create 'System Data' folder on Drive.")
         return False
         
     try:
@@ -512,7 +537,6 @@ def pull_backend_data_from_drive():
             return False
             
         os.makedirs("data", exist_ok=True)
-        os.makedirs("data/backups", exist_ok=True)
         
         success_count = 0
         for f in files:
@@ -520,57 +544,57 @@ def pull_backend_data_from_drive():
             file_name = f['name']
             local_path = os.path.join("data", file_name)
             
-            # 1. Conflict Prevention (Avoid overwriting newer local work)
+            # Critical Conflict Prevention for Streamlit Cloud:
+            # We trust Drive more on initial pull if the local file looks like a fresh clone.
             should_download = True
             if os.path.exists(local_path):
-                # Ensure we use UTC for comparison to match Drive's timezone
-                local_timestamp = os.path.getmtime(local_path)
-                local_mtime = datetime.fromtimestamp(local_timestamp, tz=timezone.utc)
-                
+                local_mtime = datetime.fromtimestamp(os.path.getmtime(local_path), tz=timezone.utc)
                 drive_mtime_str = f.get('modifiedTime', '').replace('Z', '+00:00')
                 try:
                     drive_mtime = datetime.fromisoformat(drive_mtime_str)
                     
-                    # If local is newer by more than 2 seconds, skip download to avoid losing work
-                    if (local_mtime - drive_mtime).total_seconds() > 2:
-                        should_download = False
-                        # We still back up just in case, but we don't overwrite
-                        backup_name = f"{file_name}.local_newer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
-                        shutil.copy2(local_path, os.path.join("data/backups", backup_name))
-                        continue
+                    # Logic: If local is MUCH newer (more than 5 mins), assume it was saved in THIS session.
+                    # Otherwise, IF Drive is newer OR local looks like original repo file, download.
+                    now = datetime.now(timezone.utc)
+                    age_seconds = (now - local_mtime).total_seconds()
+                    
+                    if age_seconds < 300: # Saved within last 5 minutes
+                        if (local_mtime - drive_mtime).total_seconds() > 2:
+                            should_download = False
                 except:
                     pass
 
-            # 2. Download the file
-            try:
-                request = service.files().get_media(fileId=file_id)
-                fh = io.BytesIO()
-                downloader = MediaIoBaseDownload(fh, request)
-                done = False
-                while done is False:
-                    status, done = downloader.next_chunk()
-                
-                # Backup existing file before physical overwrite
-                if os.path.exists(local_path):
-                    backup_path = local_path + ".prev"
-                    shutil.copy2(local_path, backup_path)
+            if should_download:
+                try:
+                    request = service.files().get_media(fileId=file_id)
+                    fh = io.BytesIO()
+                    downloader = MediaIoBaseDownload(fh, request)
+                    done = False
+                    while done is False:
+                        status, done = downloader.next_chunk()
+                    
+                    # Store backup
+                    if os.path.exists(local_path):
+                        shutil.copy2(local_path, local_path + ".bak")
 
-                with open(local_path, "wb") as local_file:
-                    local_file.write(fh.getvalue())
-                
-                # Set local mtime to match Drive mtime so they are in sync
-                if 'drive_mtime' in locals():
-                    os.utime(local_path, (drive_mtime.timestamp(), drive_mtime.timestamp()))
-                
-                success_count += 1
-            except Exception as e:
-                st.sidebar.warning(f"Failed to download {file_name}: {e}")
+                    with open(local_path, "wb") as local_file:
+                        local_file.write(fh.getvalue())
+                    
+                    # Set local mtime to match Drive
+                    try:
+                        drive_ts = datetime.fromisoformat(f.get('modifiedTime', '').replace('Z', '+00:00')).timestamp()
+                        os.utime(local_path, (drive_ts, drive_ts))
+                    except:
+                        pass
+                    
+                    success_count += 1
+                except Exception as e:
+                    st.sidebar.warning(f"Failed to download {file_name}: {e}")
         
-        # Return True if we at least reached this point without a fatal error
+        log_activity(f"Pull completed: {success_count} files updated.")
         return True
     except Exception as e:
         st.sidebar.error(f"Drive pull error: {e}")
-        # Clear the service cache so it tries fresh next time
         if hasattr(get_google_drive_service, "clear"):
             get_google_drive_service.clear()
         return False
