@@ -1025,6 +1025,20 @@ if "data_synced" not in st.session_state:
         pull_backend_data_from_drive()
     st.session_state.data_synced = True
 
+# --- DIAGNOSTICS AT TOP OF PAGE ---
+if not google_drive_is_ready():
+    st.sidebar.error("⚠️ Drive Disconnected")
+    with st.expander("🛠️ Google Drive Debug Info", expanded=True):
+        st.error("Google Drive is not connected. This is why 'Refresh' is failing.")
+        creds = _load_google_drive_credentials()
+        if creds is None:
+            st.warning("Reason: No valid credentials found. Please check your Streamlit Secrets.")
+            st.info("Ensure you have [service_account] block in your Secrets.")
+        else:
+            st.success("Credentials loaded, but service initialization failed.")
+else:
+    st.sidebar.success("✅ Drive Connected")
+
 with st.sidebar:
     st.markdown("---")
     with st.expander("🔄 Data Sync Settings"):
