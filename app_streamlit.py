@@ -40,65 +40,68 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Inject Auto-Bullet Javascript for textareas
-components.html(
-    """
-    <script>
-    const doc = window.parent.document;
-    if (!doc.getElementById("auto-bullet-script")) {
-        const script = doc.createElement("script");
-        script.id = "auto-bullet-script";
-        script.innerHTML = `
-            function pushValueToStreamlit(textarea, value, caretPos) {
-                let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
-                nativeInputValueSetter.call(textarea, value);
-                textarea.selectionStart = textarea.selectionEnd = caretPos;
-                textarea.dispatchEvent(new Event("input", { bubbles: true }));
-            }
+try:
+    components.html(
+        """
+        <script id="auto-bullet-script">
+        const doc = window.parent.document;
+        if (!doc.getElementById("auto-bullet-script-runner")) {
+            const script = doc.createElement("script");
+            script.id = "auto-bullet-script-runner";
+            script.innerHTML = `
+                function pushValueToStreamlit(textarea, value, caretPos) {
+                    let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+                    nativeInputValueSetter.call(textarea, value);
+                    textarea.selectionStart = textarea.selectionEnd = caretPos;
+                    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+                }
 
-            document.addEventListener("keydown", function(e) {
-                if (e.target.tagName === "TEXTAREA" && e.key === "Enter") {
-                    const val = e.target.value;
-                    const start = e.target.selectionStart;
-                    const end = e.target.selectionEnd;
-                    
-                    const textBeforeCursor = val.substring(0, start);
-                    const lastNewLine = textBeforeCursor.lastIndexOf("\\n");
-                    const currentLine = textBeforeCursor.substring(lastNewLine + 1);
-                    
-                    const bulletMatch = currentLine.match(/^(\\s*[-*•]\\s+)/);
-                    if (bulletMatch) {
-                        if (currentLine.trim() === bulletMatch[1].trim()) {
+                document.addEventListener("keydown", function(e) {
+                    if (e.target.tagName === "TEXTAREA" && e.key === "Enter") {
+                        const val = e.target.value;
+                        const start = e.target.selectionStart;
+                        const end = e.target.selectionEnd;
+                        
+                        const textBeforeCursor = val.substring(0, start);
+                        const lastNewLine = textBeforeCursor.lastIndexOf("\\\\n");
+                        const currentLine = textBeforeCursor.substring(lastNewLine + 1);
+                        
+                        const bulletMatch = currentLine.match(/^(\\\\s*[-*•]\\\\s+)/);
+                        if (bulletMatch) {
+                            if (currentLine.trim() === bulletMatch[1].trim()) {
+                                e.preventDefault();
+                                const lineStart = lastNewLine !== -1 ? lastNewLine + 1 : 0;
+                                const updatedValue = val.substring(0, lineStart) + val.substring(end);
+                                pushValueToStreamlit(e.target, updatedValue, lineStart);
+                                return;
+                            }
+
                             e.preventDefault();
-                            const lineStart = lastNewLine !== -1 ? lastNewLine + 1 : 0;
-                            const updatedValue = val.substring(0, lineStart) + val.substring(end);
-                            pushValueToStreamlit(e.target, updatedValue, lineStart);
+                            const bullet = bulletMatch[1];
+                            const newText = "\\\\n" + bullet;
+                            const updatedValue = val.substring(0, start) + newText + val.substring(end);
+                            pushValueToStreamlit(e.target, updatedValue, start + newText.length);
                             return;
                         }
 
-                        e.preventDefault();
-                        const bullet = bulletMatch[1];
-                        const newText = "\\n" + bullet;
-                        const updatedValue = val.substring(0, start) + newText + val.substring(end);
-                        pushValueToStreamlit(e.target, updatedValue, start + newText.length);
-                        return;
+                        if (currentLine.trim() !== "") {
+                            e.preventDefault();
+                            const newText = "\\\\n- ";
+                            const updatedValue = val.substring(0, start) + newText + val.substring(end);
+                            pushValueToStreamlit(e.target, updatedValue, start + newText.length);
+                        }
                     }
-
-                    if (currentLine.trim() !== "") {
-                        e.preventDefault();
-                        const newText = "\\n- ";
-                        const updatedValue = val.substring(0, start) + newText + val.substring(end);
-                        pushValueToStreamlit(e.target, updatedValue, start + newText.length);
-                    }
-                }
-            });
-        `;
-        doc.body.appendChild(script);
-    }
-    </script>
-    """,
-    height=0,
-    width=0
-)
+                });
+            `;
+            doc.body.appendChild(script);
+        }
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+except:
+    pass
 
 # --- EXCEL DATA LAYER ---
 @st.cache_data
@@ -477,8 +480,9 @@ def log_activity(message):
         with open(log_path, "a") as f:
             f.write(log_entry)
         
-        # Sync the log to Drive (System Data folder)
-        sync_data_file_to_drive(log_path)
+        # We explicitly skip syncing daily_activity.log to Drive 
+        # to prevent Service Account "Quota Exceeded" errors for new files.
+        # sync_data_file_to_drive(log_path) 
     except Exception as e:
         print(f"Logging error: {e}")
 
@@ -501,7 +505,8 @@ def sync_data_file_to_drive(local_path):
                 return True
         return False
     except Exception as e:
-        st.sidebar.error(f"Failed to sync {local_path} to Drive: {e}")
+        # Silently log errors to the console instead of the UI to avoid quota warnings
+        print(f"Failed to sync {local_path} to Drive: {e}")
         return False
 
 
