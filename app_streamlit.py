@@ -268,63 +268,63 @@ def _load_google_drive_credentials():
                 except:
                     pass
 
-    if not creds or not creds.valid:
-        if os.path.exists('credentials.json'):
-            try:
-                from google_auth_oauthlib.flow import InstalledAppFlow
-                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
-                creds = flow.run_local_server(port=0)
-                with open('token.json', 'w') as token:
-                    token.write(creds.to_json())
-            except Exception as e:
-                try:
-                    st.sidebar.error(f"OAuth Flow error: {e}")
-                except:
-                    pass
-
     if creds and creds.valid:
         return creds
 
     # Token existed but was invalid/expired and couldn't be refreshed automatically.
-    # We should continue to Service Account fallback instead of potentially hanging.
+    # We should prefer Service Account fallback before trying interactive OAuth.
+    
+    if service_account is not None:
+        # 1. Check file path (optional)
+        service_account_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+        if service_account_path and os.path.exists(service_account_path):
+            try:
+                return service_account.Credentials.from_service_account_file(
+                    service_account_path,
+                    scopes=GOOGLE_DRIVE_SCOPES
+                )
+            except:
+                pass
 
-    if service_account is None:
-        return None
+        # 2. Check JSON string (optional)
+        service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+        if service_account_json:
+            try:
+                return service_account.Credentials.from_service_account_info(
+                    json.loads(service_account_json),
+                    scopes=GOOGLE_DRIVE_SCOPES
+                )
+            except Exception:
+                pass
 
-    # 1. Check file path (optional)
-    service_account_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
-    if service_account_path and os.path.exists(service_account_path):
-        return service_account.Credentials.from_service_account_file(
-            service_account_path,
-            scopes=GOOGLE_DRIVE_SCOPES
-        )
-
-    # 2. Check JSON string (optional)
-    service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-    if service_account_json:
+        # 3. Read from Streamlit secrets
         try:
-            return service_account.Credentials.from_service_account_info(
-                json.loads(service_account_json),
-                scopes=GOOGLE_DRIVE_SCOPES
-            )
-        except Exception:
-            pass
+            secret_account = st.secrets.get("service_account") or st.secrets.get("gdrive_service_account")
+            if secret_account:
+                return service_account.Credentials.from_service_account_info(
+                    dict(secret_account),
+                    scopes=GOOGLE_DRIVE_SCOPES
+                )
+        except Exception as e:
+            try:
+                st.sidebar.error(f"Secrets error: {e}")
+            except:
+                pass
 
-    # 3. Read from Streamlit secrets
-    try:
-        secret_account = st.secrets.get("service_account") or st.secrets.get("gdrive_service_account")
-
-        if secret_account:
-            return service_account.Credentials.from_service_account_info(
-                dict(secret_account),
-                scopes=GOOGLE_DRIVE_SCOPES
-            )
-    except Exception as e:
+    # If Service Account is not available, try OAuth Flow as a last resort
+    if os.path.exists('credentials.json'):
         try:
-            st.sidebar.error(f"Secrets error: {e}")
-        except:
-            pass
-        return None
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
+            creds = flow.run_local_server(port=0)
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+            return creds
+        except Exception as e:
+            try:
+                st.sidebar.error(f"OAuth Flow error: {e}")
+            except:
+                pass
 
     return None
 
