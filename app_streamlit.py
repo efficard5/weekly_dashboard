@@ -1028,47 +1028,16 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
 
 # --- INITIAL SYNC ---
 if "data_synced" not in st.session_state:
-    with st.spinner("Syncing data from Drive..."):
+    with st.spinner("Syncing latest data from Cloud..."):
         pull_backend_data_from_drive()
     st.session_state.data_synced = True
 
-# --- DIAGNOSTICS AT TOP OF PAGE ---
-if not google_drive_is_ready():
-    st.sidebar.error("⚠️ Drive Disconnected")
-    with st.expander("🛠️ Google Drive Debug Info", expanded=True):
-        st.error("Google Drive is not connected. This is why 'Refresh' is failing.")
-        
-        last_err = st.session_state.get("last_drive_error")
-        if last_err:
-            st.warning(f"Technical Error: {last_err}")
-            
-        creds = _load_google_drive_credentials()
-        if creds is None:
-            st.warning("Reason: No valid credentials found. Please check your Streamlit Secrets.")
-        else:
-            st.success("Credentials (Service Account) were parsed, but could not connect.")
-else:
-    st.sidebar.success("✅ Drive Connected")
-
 with st.sidebar:
     st.markdown("---")
-    with st.expander("🔄 Data Sync Settings"):
-        if st.button("🔄 Refresh from Cloud"):
-            with st.spinner("Refreshing..."):
-                try:
-                    ok = pull_backend_data_from_drive()
-                    if ok:
-                        st.success("Successfully refreshed from Cloud.")
-                        st.rerun()
-                    else:
-                        st.error("Refresh failed. Check the sidebar for details.")
-                except Exception as e:
-                    st.error(f"Sync Button Error: {e}")
-        
-        # Display last updated timestamp for local storage
-        if os.path.exists("data/tasks.xlsx"):
-            mtime = os.path.getmtime("data/tasks.xlsx")
-            st.caption(f"Local storage last updated: {datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+    # Display last updated timestamp for local storage
+    if os.path.exists("data/tasks.xlsx"):
+        mtime = os.path.getmtime("data/tasks.xlsx")
+        st.caption(f"Last synced: {datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%m:%S')}")
     st.markdown("---")
 
 df = load_data()
