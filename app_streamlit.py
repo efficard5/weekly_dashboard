@@ -1021,8 +1021,26 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
 
 # --- INITIAL SYNC ---
 if "data_synced" not in st.session_state:
-    pull_backend_data_from_drive()
+    with st.spinner("Syncing data from Drive..."):
+        pull_backend_data_from_drive()
     st.session_state.data_synced = True
+
+with st.sidebar:
+    st.markdown("---")
+    with st.expander("🔄 Data Sync Settings"):
+        if st.button("🔄 Refresh from Cloud"):
+            with st.spinner("Refreshing..."):
+                if pull_backend_data_from_drive():
+                    st.success("Successfully refreshed from Cloud.")
+                    st.rerun()
+                else:
+                    st.error("Refresh failed.")
+        
+        # Display last updated timestamp for local storage
+        if os.path.exists("data/tasks.xlsx"):
+            mtime = os.path.getmtime("data/tasks.xlsx")
+            st.caption(f"Local storage last updated: {datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+    st.markdown("---")
 
 df = load_data()
 
