@@ -104,23 +104,18 @@ components.html(
 @st.cache_data
 def load_data():
     file_path = "data/tasks.xlsx"
-    legacy_project_names = {
-        "Default Project": "Truck Unloading Project",
-        "R&D Project": "Truck Unloading Project",
-    }
     required_cols = [
         "Project", "Topic", "Task Name", "Start Date", "End Date", 
         "Completion %", "Status", "Employee", "Week", "Hidden",
         "Milestone_Text", "Milestone_Role", "Milestone_Author_Name"
     ]
-    
     if os.path.exists(file_path):
         df = pd.read_excel(file_path)
         needs_save = False
         # Consolidate column defaults and type enforcement into a single loop
         defaults = {
             "Hidden": False, "Completion %": 0, "Week": 1, 
-            "Project": "Truck Unloading Project", "Employee": "Unassigned",
+            "Project": "R&D Project", "Employee": "Unassigned",
             "Milestone_Role": "None"
         }
         for col in required_cols:
@@ -128,11 +123,6 @@ def load_data():
                 df[col] = defaults.get(col, "")
                 needs_save = True
         
-        if "Project" in df.columns:
-            normalized_projects = df["Project"].replace(legacy_project_names)
-            if not normalized_projects.equals(df["Project"]):
-                df["Project"] = normalized_projects
-                needs_save = True
         df["Hidden"] = df["Hidden"].fillna(False).astype(bool)
         if needs_save:
             os.makedirs("data", exist_ok=True)
@@ -657,6 +647,14 @@ def get_project_storage_candidates(project_name):
         return []
     return [project_name] + LEGACY_PROJECT_NAMES.get(project_name, [])
 
+def is_project_match(p1, p2):
+    p1 = str(p1 or "").strip()
+    p2 = str(p2 or "").strip()
+    if p1 == p2:
+        return True
+    # Check aliases
+    return p2 in get_project_storage_candidates(p1) or p1 in get_project_storage_candidates(p2)
+
 def get_existing_topic_dir(project_name, topic_name):
     for candidate_project in get_project_storage_candidates(project_name):
         topic_dir = os.path.join("pmo_storage", candidate_project, str(topic_name))
@@ -818,7 +816,7 @@ def get_planned_topic_adjustments(project_name, milestones):
 
     for mil_info in milestones.values():
         milestone_project = str(mil_info.get("project_context", "")).strip()
-        if milestone_project != project_name:
+        if not is_project_match(milestone_project, project_name):
             continue
         if not bool(mil_info.get("completed", False)):
             continue
@@ -883,7 +881,7 @@ def get_completed_milestone_total(project_name, milestones, topic_name="All Topi
     for mil_info in milestones.values():
         if not bool(mil_info.get("completed", False)):
             continue
-        if str(mil_info.get("project_context", "")).strip() != str(project_name).strip():
+        if not is_project_match(mil_info.get("project_context", ""), project_name):
             continue
         milestone_topic = get_milestone_topic(mil_info)
         if topic_name != "All Topics" and milestone_topic not in [topic_name, "All Topics"]:
