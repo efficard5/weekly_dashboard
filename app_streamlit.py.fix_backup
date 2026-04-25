@@ -2,10 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+import copy
+import glob
 from datetime import datetime, timedelta
 import os
 import json
 import mimetypes
+import uuid
 
 
 try:
@@ -100,6 +103,322 @@ st.html(
     unsafe_allow_javascript=True
 )
 
+BACKEND_SYNC_STATE_PATH = "data/backend_sync_state.json"
+SYNC_CLOCK_SKEW_SECONDS = 2
+PLANNED_MILESTONE_SNAPSHOT_PATH = "data/planned_milestones.json"
+PLANNED_MILESTONE_RECORD_PREFIX = "planned_milestone_record_"
+
+
+def _utc_now_iso():
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _normalize_sync_path(local_path):
+    return os.path.normpath(local_path)
+
+
+def load_backend_sync_state():
+    if os.path.exists(BACKEND_SYNC_STATE_PATH):
+        try:
+            with open(BACKEND_SYNC_STATE_PATH, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {"files": {}}
+
+
+def save_backend_sync_state(state):
+    os.makedirs("data", exist_ok=True)
+    with open(BACKEND_SYNC_STATE_PATH, "w") as f:
+        json.dump(state, f, indent=4)
+
+
+def update_backend_sync_state(local_path, **updates):
+    state = load_backend_sync_state()
+    files = state.setdefault("files", {})
+    path_key = _normalize_sync_path(local_path)
+    entry = files.setdefault(path_key, {})
+
+    for key, value in updates.items():
+        if value is not None:
+            entry[key] = value
+
+    if os.path.exists(local_path):
+        try:
+            entry["last_local_mtime"] = os.path.getmtime(local_path)
+        except OSError:
+            pass
+
+    save_backend_sync_state(state)
+    return entry
+
+
+def mark_backend_file_dirty(local_path):
+    update_backend_sync_state(
+        local_path,
+        pending_upload=True,
+        local_saved_at=_utc_now_iso(),
+        last_upload_error=None,
+    )
+
+
+def _planned_milestone_record_path(record_id):
+    return os.path.join("data", f"{PLANNED_MILESTONE_RECORD_PREFIX}{record_id}.json")
+
+
+def _strip_planned_milestone_meta(mil_info):
+    payload = copy.deepcopy(mil_info)
+    if isinstance(payload, dict):
+        payload.pop("_meta", None)
+    return payload
+
+
+def _get_planned_milestone_meta(mil_info):
+    if isinstance(mil_info, dict):
+        meta = mil_info.get("_meta", {})
+        if isinstance(meta, dict):
+            return meta
+    return {}
+
+
+def get_planned_milestone_version(mil_info):
+    try:
+        return int(_get_planned_milestone_meta(mil_info).get("version", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def get_planned_milestone_record_id(mil_info):
+    return str(_get_planned_milestone_meta(mil_info).get("record_id", "")).strip()
+
+
+def _annotate_planned_milestone(milestone_name, payload, record_id, version, updated_at, storage):
+    annotated = _strip_planned_milestone_meta(payload)
+    annotated["_meta"] = {
+        "milestone_id": milestone_name,
+        "record_id": record_id,
+        "version": int(version),
+        "updated_at": updated_at,
+        "storage": storage,
+    }
+    return annotated
+
+
+def _planned_milestone_conflict_message(milestone_name, latest_info):
+    latest_meta = _get_planned_milestone_meta(latest_info)
+    updated_at = latest_meta.get("updated_at", "unknown time")
+    version = latest_meta.get("version", "?")
+    return (
+        f"Conflict detected for {milestone_name}. Another user updated it first "
+        f"(version {version}, updated {updated_at}). Refresh the page, review the latest values, then save again."
+    )
+
+
+def _write_planned_milestone_record(record_id, milestone_name, payload, version, deleted=False):
+    os.makedirs("data", exist_ok=True)
+    record_path = _planned_milestone_record_path(record_id)
+    record_data = {
+        "record_id": record_id,
+        "milestone_id": milestone_name,
+        "version": int(version),
+        "updated_at": _utc_now_iso(),
+        "deleted": bool(deleted),
+        "data": {} if deleted else _strip_planned_milestone_meta(payload),
+    }
+    with open(record_path, "w") as f:
+        json.dump(record_data, f, indent=4)
+    mark_backend_file_dirty(record_path)
+    sync_data_file_to_drive(record_path)
+    return record_data
+
+
+def _write_planned_milestone_snapshot(milestones):
+    snapshot = {
+        milestone_name: _strip_planned_milestone_meta(mil_info)
+        for milestone_name, mil_info in milestones.items()
+    }
+    os.makedirs("data", exist_ok=True)
+    with open(PLANNED_MILESTONE_SNAPSHOT_PATH, "w") as f:
+        json.dump(snapshot, f, indent=4)
+    mark_backend_file_dirty(PLANNED_MILESTONE_SNAPSHOT_PATH)
+    sync_data_file_to_drive(PLANNED_MILESTONE_SNAPSHOT_PATH)
+
+
+def _load_planned_milestone_snapshot():
+    if os.path.exists(PLANNED_MILESTONE_SNAPSHOT_PATH):
+        try:
+            with open(PLANNED_MILESTONE_SNAPSHOT_PATH, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+
+def _load_planned_milestone_records():
+    record_paths = glob.glob(os.path.join("data", f"{PLANNED_MILESTONE_RECORD_PREFIX}*.json"))
+    latest_by_name = {}
+
+    for record_path in record_paths:
+        try:
+            with open(record_path, "r") as f:
+                record = json.load(f)
+        except Exception:
+            continue
+
+        milestone_name = str(record.get("milestone_id", "")).strip()
+        if milestone_name == "":
+            continue
+
+        try:
+            version = int(record.get("version", 0) or 0)
+        except (TypeError, ValueError):
+            version = 0
+
+        current = latest_by_name.get(milestone_name)
+        if current is None or version >= current.get("version", 0):
+            latest_by_name[milestone_name] = {
+                "record_id": str(record.get("record_id", "")).strip(),
+                "version": version,
+                "updated_at": record.get("updated_at", ""),
+                "deleted": bool(record.get("deleted", False)),
+                "data": record.get("data", {}),
+            }
+
+    return latest_by_name
+
+
+def load_planned_milestones():
+    record_entries = _load_planned_milestone_records()
+    milestones = {}
+    tombstoned_names = set()
+
+    for milestone_name, record in record_entries.items():
+        if record.get("deleted"):
+            tombstoned_names.add(milestone_name)
+            continue
+        payload = record.get("data", {})
+        if not isinstance(payload, dict):
+            payload = {}
+        milestones[milestone_name] = _annotate_planned_milestone(
+            milestone_name,
+            payload,
+            record.get("record_id") or str(uuid.uuid4()),
+            record.get("version", 1),
+            record.get("updated_at", ""),
+            "record",
+        )
+
+    snapshot_mtime = None
+    if os.path.exists(PLANNED_MILESTONE_SNAPSHOT_PATH):
+        try:
+            snapshot_mtime = datetime.fromtimestamp(os.path.getmtime(PLANNED_MILESTONE_SNAPSHOT_PATH)).strftime("%Y-%m-%d %H:%M:%S")
+        except OSError:
+            snapshot_mtime = None
+
+    for milestone_name, payload in _load_planned_milestone_snapshot().items():
+        if milestone_name in milestones or milestone_name in tombstoned_names:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        milestones[milestone_name] = _annotate_planned_milestone(
+            milestone_name,
+            payload,
+            f"legacy::{milestone_name}",
+            1,
+            snapshot_mtime or "legacy snapshot",
+            "legacy_snapshot",
+        )
+
+    return milestones
+
+
+def save_planned_milestone_entry(milestone_name, mil_info, expected_version=None, previous_name=None):
+    milestone_name = str(milestone_name or "").strip()
+    previous_name = str(previous_name or milestone_name).strip()
+    if milestone_name == "":
+        return False, "Please provide a milestone name."
+
+    current_data = load_planned_milestones()
+    current_info = current_data.get(previous_name)
+    current_version = get_planned_milestone_version(current_info)
+
+    if expected_version is not None and current_version != int(expected_version):
+        return False, _planned_milestone_conflict_message(previous_name, current_info)
+
+    if milestone_name != previous_name and milestone_name in current_data:
+        return False, "A milestone with this name already exists. Please choose a different name."
+
+    record_id = get_planned_milestone_record_id(current_info) or get_planned_milestone_record_id(mil_info)
+    if record_id == "" or record_id.startswith("legacy::"):
+        record_id = str(uuid.uuid4())
+
+    next_version = max(current_version, 0) + 1
+    record_data = _write_planned_milestone_record(record_id, milestone_name, mil_info, next_version, deleted=False)
+    saved_info = _annotate_planned_milestone(
+        milestone_name,
+        mil_info,
+        record_id,
+        next_version,
+        record_data.get("updated_at", _utc_now_iso()),
+        "record",
+    )
+
+    if previous_name != milestone_name and previous_name in current_data:
+        _write_planned_milestone_record(str(uuid.uuid4()), previous_name, {}, next_version, deleted=True)
+        del current_data[previous_name]
+    current_data[milestone_name] = saved_info
+    _write_planned_milestone_snapshot(current_data)
+    log_activity(f"Updated planned milestone {milestone_name}")
+    return True, saved_info
+
+
+def delete_planned_milestone_entry(milestone_name, expected_version=None):
+    milestone_name = str(milestone_name or "").strip()
+    current_data = load_planned_milestones()
+    current_info = current_data.get(milestone_name)
+    if current_info is None:
+        return False, f"{milestone_name} was already removed."
+
+    current_version = get_planned_milestone_version(current_info)
+    if expected_version is not None and current_version != int(expected_version):
+        return False, _planned_milestone_conflict_message(milestone_name, current_info)
+
+    record_id = get_planned_milestone_record_id(current_info)
+    if record_id == "" or record_id.startswith("legacy::"):
+        record_id = str(uuid.uuid4())
+
+    _write_planned_milestone_record(record_id, milestone_name, {}, current_version + 1, deleted=True)
+    del current_data[milestone_name]
+    _write_planned_milestone_snapshot(current_data)
+    log_activity(f"Deleted planned milestone {milestone_name}")
+    return True, None
+
+
+def _seed_milestone_edit_version_state(state_key, mil_info):
+    version_key = f"{state_key}__base_version"
+    record_key = f"{state_key}__record_id"
+    current_record_id = get_planned_milestone_record_id(mil_info)
+    if (
+        version_key not in st.session_state
+        or st.session_state.get(record_key) != current_record_id
+    ):
+        st.session_state[version_key] = get_planned_milestone_version(mil_info)
+        st.session_state[record_key] = current_record_id
+
+
+def _get_milestone_edit_base_version(state_key, mil_info):
+    _seed_milestone_edit_version_state(state_key, mil_info)
+    return st.session_state.get(f"{state_key}__base_version")
+
+
+def _clear_milestone_edit_version_state(state_key):
+    st.session_state.pop(f"{state_key}__base_version", None)
+    st.session_state.pop(f"{state_key}__record_id", None)
+
 # --- EXCEL DATA LAYER ---
 @st.cache_data
 def load_data():
@@ -133,6 +452,7 @@ def load_data():
 def save_data(data_df):
     os.makedirs("data", exist_ok=True)
     data_df.to_excel("data/tasks.xlsx", index=False)
+    mark_backend_file_dirty("data/tasks.xlsx")
     sync_data_file_to_drive("data/tasks.xlsx")
     log_activity("Updated tasks.xlsx")
     st.cache_data.clear()  # Ensure the next load reflects the newly saved data
@@ -147,21 +467,9 @@ def save_notes(notes):
     os.makedirs("data", exist_ok=True)
     with open("data/project_notes.json", "w") as f:
         json.dump(notes, f, indent=4)
+    mark_backend_file_dirty("data/project_notes.json")
     sync_data_file_to_drive("data/project_notes.json")
     log_activity("Updated project_notes.json")
-
-def load_planned_milestones():
-    if os.path.exists("data/planned_milestones.json"):
-        with open("data/planned_milestones.json", "r") as f:
-            return json.load(f)
-    return {}
-
-def save_planned_milestones(milestones):
-    os.makedirs("data", exist_ok=True)
-    with open("data/planned_milestones.json", "w") as f:
-        json.dump(milestones, f, indent=4)
-    sync_data_file_to_drive("data/planned_milestones.json")
-    log_activity("Updated planned_milestones.json")
 
 def load_drive_metadata():
     if os.path.exists("data/drive_metadata.json"):
@@ -173,6 +481,7 @@ def save_drive_metadata(data):
     os.makedirs("data", exist_ok=True)
     with open("data/drive_metadata.json", "w") as f:
         json.dump(data, f, indent=4)
+    mark_backend_file_dirty("data/drive_metadata.json")
     sync_data_file_to_drive("data/drive_metadata.json")
     log_activity("Updated drive_metadata.json")
 
@@ -213,6 +522,7 @@ def save_competitor_data(data):
                     else:
                         pd.DataFrame(rows).to_excel(writer, sheet_name=safe_sheet, index=False)
                         
+        mark_backend_file_dirty(file_path)
         sync_data_file_to_drive(file_path)
         log_activity("Updated competitors.xlsx")
     except Exception as e:
@@ -491,6 +801,11 @@ def log_activity(message):
 def sync_data_file_to_drive(local_path):
     """Upload a specific local data file to the 'System Data' folder on Drive"""
     if not google_drive_is_ready():
+        update_backend_sync_state(
+            local_path,
+            pending_upload=True,
+            last_upload_error="Drive not ready",
+        )
         return False
     try:
         import os
@@ -504,9 +819,26 @@ def sync_data_file_to_drive(local_path):
                 if "last_sync" not in st.session_state:
                     st.session_state.last_sync = {}
                 st.session_state.last_sync[local_path] = drive_file.get("id")
+                update_backend_sync_state(
+                    local_path,
+                    pending_upload=False,
+                    last_upload_ok_at=_utc_now_iso(),
+                    last_upload_error=None,
+                    drive_file_id=drive_file.get("id"),
+                )
                 return True
+        update_backend_sync_state(
+            local_path,
+            pending_upload=True,
+            last_upload_error="Drive upload returned no file metadata",
+        )
         return False
     except Exception as e:
+        update_backend_sync_state(
+            local_path,
+            pending_upload=True,
+            last_upload_error=str(e),
+        )
         st.sidebar.error(f"Failed to sync {local_path} to Drive: {e}")
         return False
 
@@ -545,6 +877,7 @@ def pull_backend_data_from_drive():
         os.makedirs("data", exist_ok=True)
         
         success_count = 0
+        sync_state = load_backend_sync_state().get("files", {})
         for f in files:
             file_id = f['id']
             file_name = f['name']
@@ -556,17 +889,26 @@ def pull_backend_data_from_drive():
             if os.path.exists(local_path):
                 local_mtime = datetime.fromtimestamp(os.path.getmtime(local_path), tz=timezone.utc)
                 drive_mtime_str = f.get('modifiedTime', '').replace('Z', '+00:00')
+                sync_entry = sync_state.get(_normalize_sync_path(local_path), {})
                 try:
                     drive_mtime = datetime.fromisoformat(drive_mtime_str)
-                    
-                    now = datetime.now(timezone.utc)
-                    age_seconds = (now - local_mtime).total_seconds()
-                    
-                    # Logic: If local is MUCH newer (more than 5 mins), assume it was saved in THIS session.
-                    # Otherwise, IF Drive is newer OR local looks like original repo file, download.
-                    if age_seconds < 300: # Saved within last 5 minutes
-                        if (local_mtime - drive_mtime).total_seconds() > 2:
-                            should_download = False
+
+                    if sync_entry.get("pending_upload"):
+                        should_download = False
+                        try:
+                            sync_data_file_to_drive(local_path)
+                        except Exception:
+                            pass
+                    elif (drive_mtime - local_mtime).total_seconds() > SYNC_CLOCK_SKEW_SECONDS:
+                        should_download = True
+                    elif (local_mtime - drive_mtime).total_seconds() > SYNC_CLOCK_SKEW_SECONDS:
+                        should_download = False
+                        try:
+                            sync_data_file_to_drive(local_path)
+                        except Exception:
+                            pass
+                    else:
+                        should_download = False
                 except:
                     pass
 
@@ -592,6 +934,13 @@ def pull_backend_data_from_drive():
                         os.utime(local_path, (drive_ts, drive_ts))
                     except:
                         pass
+
+                    update_backend_sync_state(
+                        local_path,
+                        pending_upload=False,
+                        last_upload_error=None,
+                        last_drive_modified_time=f.get("modifiedTime"),
+                    )
                     
                     success_count += 1
                 except Exception as e:
@@ -945,13 +1294,20 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
     action_col1, action_col2 = st.columns([1, 6])
     if action_col1.button("✏️ Edit Milestone", key=f"cm_edit_{mil_id}"):
         st.session_state[f"cm_edit_mode_{mil_id}"] = not st.session_state.get(f"cm_edit_mode_{mil_id}", False)
+        if st.session_state[f"cm_edit_mode_{mil_id}"]:
+            _seed_milestone_edit_version_state(f"cm_edit_mode_{mil_id}", mil_info)
+        else:
+            _clear_milestone_edit_version_state(f"cm_edit_mode_{mil_id}")
         st.rerun()
     if action_col2.button("🗑️ Delete Milestone", key=f"cm_delete_{mil_id}"):
-        del pm_data[mil_id]
-        save_planned_milestones(pm_data)
-        st.rerun()
+        deleted, message = delete_planned_milestone_entry(mil_id, expected_version=get_planned_milestone_version(mil_info))
+        if deleted:
+            st.rerun()
+        else:
+            st.error(message)
 
     if st.session_state.get(f"cm_edit_mode_{mil_id}", False):
+        base_version = _get_milestone_edit_base_version(f"cm_edit_mode_{mil_id}", mil_info)
         edit_col1, edit_col2, edit_col3, edit_col4, edit_col5 = st.columns([3, 1, 1, 2, 2])
         milestone_desc = edit_col1.text_area("Milestone Description", value=mil_info.get("description", ""), key=f"cm_desc_{mil_id}")
         edit_col2.text_input("Name", value=mil_id, disabled=True, key=f"cm_name_{mil_id}")
@@ -1005,23 +1361,32 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
             if milestone_end < milestone_start:
                 st.error("To Date cannot be earlier than From Date.")
             else:
-                mil_info["description"] = str(milestone_desc)
-                mil_info["time_needed"] = float(milestone_time)
-                mil_info["from_date"] = milestone_start.strftime("%Y-%m-%d")
-                mil_info["to_date"] = milestone_end.strftime("%Y-%m-%d")
-                mil_info["project_context"] = milestone_project_edit
-                mil_info["topic"] = milestone_topic_edit
-                mil_info["progress_increase"] = float(milestone_pct)
-                save_planned_milestones(pm_data)
-                st.session_state[f"cm_edit_mode_{mil_id}"] = False
-                st.success(f"Saved {mil_id}.")
+                updated_info = copy.deepcopy(mil_info)
+                updated_info["description"] = str(milestone_desc)
+                updated_info["time_needed"] = float(milestone_time)
+                updated_info["from_date"] = milestone_start.strftime("%Y-%m-%d")
+                updated_info["to_date"] = milestone_end.strftime("%Y-%m-%d")
+                updated_info["project_context"] = milestone_project_edit
+                updated_info["topic"] = milestone_topic_edit
+                updated_info["progress_increase"] = float(milestone_pct)
+                saved, result = save_planned_milestone_entry(mil_id, updated_info, expected_version=base_version)
+                if saved:
+                    st.session_state[f"cm_edit_mode_{mil_id}"] = False
+                    _clear_milestone_edit_version_state(f"cm_edit_mode_{mil_id}")
+                    st.success(f"Saved {mil_id}.")
+                    st.rerun()
+                else:
+                    st.error(result)
         if save_col2.button("Cancel", key=f"cm_cancel_{mil_id}"):
             st.session_state[f"cm_edit_mode_{mil_id}"] = False
+            _clear_milestone_edit_version_state(f"cm_edit_mode_{mil_id}")
             st.rerun()
 
     st.markdown("**Admin Task Edit**")
     for t_id, t_info in mil_info.get("tasks", {}).items():
         with st.expander(f"✏️ Edit {t_id}", expanded=False):
+            task_form_key = f"ct_edit_{mil_id}_{t_id}"
+            task_base_version = _get_milestone_edit_base_version(task_form_key, mil_info)
             task_col1, task_col2, task_col3, task_col4 = st.columns([3, 1, 2, 2])
             edit_desc = task_col1.text_area("Task Description", value=t_info.get("description", ""), key=f"ct_desc_{mil_id}_{t_id}")
             edit_time = task_col2.number_input(
@@ -1054,17 +1419,37 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
                 if edit_end < edit_start:
                     st.error("To Date cannot be earlier than From Date.")
                 else:
-                    t_info["description"] = str(edit_desc)
-                    t_info["time_needed"] = float(edit_time)
-                    t_info["from_date"] = edit_start.strftime("%Y-%m-%d")
-                    t_info["to_date"] = edit_end.strftime("%Y-%m-%d")
-                    t_info["project"] = milestone_project
-                    t_info["topic"] = edit_topic
-                    save_planned_milestones(pm_data)
-                    st.success(f"Saved {t_id}.")
+                    updated_info = copy.deepcopy(mil_info)
+                    updated_task = updated_info["tasks"][t_id]
+                    updated_task["description"] = str(edit_desc)
+                    updated_task["time_needed"] = float(edit_time)
+                    updated_task["from_date"] = edit_start.strftime("%Y-%m-%d")
+                    updated_task["to_date"] = edit_end.strftime("%Y-%m-%d")
+                    updated_task["project"] = milestone_project
+                    updated_task["topic"] = edit_topic
+                    saved, result = save_planned_milestone_entry(
+                        mil_id,
+                        updated_info,
+                        expected_version=task_base_version,
+                    )
+                    if saved:
+                        _clear_milestone_edit_version_state(task_form_key)
+                        st.success(f"Saved {t_id}.")
+                        st.rerun()
+                    else:
+                        st.error(result)
             if save_col2.button("🗑️ Delete Task", key=f"ct_delete_{mil_id}_{t_id}"):
-                del mil_info["tasks"][t_id]
-                save_planned_milestones(pm_data)
+                updated_info = copy.deepcopy(mil_info)
+                del updated_info["tasks"][t_id]
+                saved, result = save_planned_milestone_entry(
+                    mil_id,
+                    updated_info,
+                    expected_version=get_planned_milestone_version(mil_info),
+                )
+                if saved:
+                    st.rerun()
+                else:
+                    st.error(result)
 
 # --- INITIAL SYNC ---
 try:
@@ -2120,13 +2505,20 @@ elif page == "Planned Milestones":
                     "completed": False,
                     "tasks": {}
                 }
-                save_planned_milestones(pm_data)
-                
-                for k in ["nm_desc", "nm_name", "nm_time", "nm_start", "nm_end", "nm_project"]:
-                    if k in st.session_state:
-                        del st.session_state[k]
-
-                st.success(f"Added {milestone_name}")
+                saved, result = save_planned_milestone_entry(
+                    milestone_name,
+                    pm_data[milestone_name],
+                    expected_version=0,
+                )
+                if saved:
+                    for k in ["nm_desc", "nm_name", "nm_time", "nm_start", "nm_end", "nm_project"]:
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.success(f"Added {milestone_name}")
+                    st.rerun()
+                else:
+                    st.error(result)
+                    del pm_data[milestone_name]
 
     st.divider()
     
@@ -2145,9 +2537,17 @@ elif page == "Planned Milestones":
             header_col1.markdown(f"### 🎯 {mil_id}")
             milestone_done = header_col2.checkbox("Completed", value=False, key=f"done_{mil_id}")
             if milestone_done:
-                mil_info["completed"] = True
-                save_planned_milestones(pm_data)
-                st.rerun()
+                updated_info = copy.deepcopy(mil_info)
+                updated_info["completed"] = True
+                saved, result = save_planned_milestone_entry(
+                    mil_id,
+                    updated_info,
+                    expected_version=get_planned_milestone_version(mil_info),
+                )
+                if saved:
+                    st.rerun()
+                else:
+                    st.error(result)
             
             # --- Edit Mode for Milestone ---
             edit_m_key = f"edit_m_{mil_id}"
@@ -2155,6 +2555,7 @@ elif page == "Planned Milestones":
                 st.session_state[edit_m_key] = False
 
             if st.session_state[edit_m_key]:
+                base_version = _get_milestone_edit_base_version(edit_m_key, mil_info)
                 em_c1, em_c2, em_c3, em_c4, em_c5 = st.columns([3, 1, 1, 2, 2])
                 e_m_desc = em_c1.text_area("Description", value=mil_info["description"], key=f"emd_{mil_id}")
                 e_m_name = em_c2.text_input("Name", value=mil_id, key=f"emn_{mil_id}")
@@ -2197,24 +2598,31 @@ elif page == "Planned Milestones":
                     elif e_m_end < e_m_start:
                         st.error("To Date cannot be earlier than From Date.")
                     else:
-                        if new_milestone_name != mil_id:
-                            pm_data[new_milestone_name] = pm_data.pop(mil_id)
-                            mil_info = pm_data[new_milestone_name]
-                            st.session_state[f"edit_m_{new_milestone_name}"] = st.session_state.pop(edit_m_key, False)
-                            edit_m_key = f"edit_m_{new_milestone_name}"
-                            mil_id = new_milestone_name
-                        mil_info["description"] = str(e_m_desc)
-                        mil_info["time_needed"] = float(e_m_time)
-                        mil_info["from_date"] = e_m_start.strftime("%Y-%m-%d")
-                        mil_info["to_date"] = e_m_end.strftime("%Y-%m-%d")
-                        mil_info["project_context"] = e_m_project
-                        mil_info["progress_increase"] = {k: float(v) for k, v in e_topic_increases.items()}
-                        if "topic" in mil_info:
-                            del mil_info["topic"]
-                        save_planned_milestones(pm_data)
-                        st.session_state[edit_m_key] = False
+                        updated_info = copy.deepcopy(mil_info)
+                        updated_info["description"] = str(e_m_desc)
+                        updated_info["time_needed"] = float(e_m_time)
+                        updated_info["from_date"] = e_m_start.strftime("%Y-%m-%d")
+                        updated_info["to_date"] = e_m_end.strftime("%Y-%m-%d")
+                        updated_info["project_context"] = e_m_project
+                        updated_info["progress_increase"] = {k: float(v) for k, v in e_topic_increases.items()}
+                        if "topic" in updated_info:
+                            del updated_info["topic"]
+                        saved, result = save_planned_milestone_entry(
+                            new_milestone_name,
+                            updated_info,
+                            expected_version=base_version,
+                            previous_name=mil_id,
+                        )
+                        if saved:
+                            st.session_state[edit_m_key] = False
+                            _clear_milestone_edit_version_state(edit_m_key)
+                            st.success(f"Saved {new_milestone_name}.")
+                            st.rerun()
+                        else:
+                            st.error(result)
                 if scol2.button("❌", key=f"cm_{mil_id}"):
                     st.session_state[edit_m_key] = False
+                    _clear_milestone_edit_version_state(edit_m_key)
                     st.rerun()
             else:
                 md_c1, md_c2, md_c3, md_c4 = st.columns([4.4, 2.2, 0.8, 0.8])
@@ -2230,11 +2638,17 @@ elif page == "Planned Milestones":
                 )
                 if md_c3.button("✏️ Edit", key=f"bem_{mil_id}"):
                     st.session_state[edit_m_key] = True
+                    _seed_milestone_edit_version_state(edit_m_key, mil_info)
                     st.rerun()
                 if md_c4.button("🗑️ Del", key=f"delm_{mil_id}"):
-                    del pm_data[mil_id]
-                    save_planned_milestones(pm_data)
-                    st.rerun()
+                    deleted, message = delete_planned_milestone_entry(
+                        mil_id,
+                        expected_version=get_planned_milestone_version(mil_info),
+                    )
+                    if deleted:
+                        st.rerun()
+                    else:
+                        st.error(message)
 
             # Tasks Display
             m_tasks = mil_info.get("tasks", {})
@@ -2252,9 +2666,17 @@ elif page == "Planned Milestones":
                         current_completed = bool(t_info.get("completed", False))
                         task_completed = row_col3.checkbox("Completed", value=current_completed, key=completed_key)
                         if task_completed != current_completed:
-                            t_info["completed"] = task_completed
-                            save_planned_milestones(pm_data)
-                            st.rerun()
+                            updated_info = copy.deepcopy(mil_info)
+                            updated_info["tasks"][t_id]["completed"] = task_completed
+                            saved, result = save_planned_milestone_entry(
+                                mil_id,
+                                updated_info,
+                                expected_version=get_planned_milestone_version(mil_info),
+                            )
+                            if saved:
+                                st.rerun()
+                            else:
+                                st.error(result)
                         action_col1, action_col2 = row_col3.columns(2)
                         
                         edit_t_key = f"edit_t_{mil_id}_{t_id}"
@@ -2263,13 +2685,26 @@ elif page == "Planned Milestones":
                              
                         if action_col1.button("✏️", key=f"bet_{mil_id}_{t_id}"):
                              st.session_state[edit_t_key] = not st.session_state[edit_t_key]
+                             if st.session_state[edit_t_key]:
+                                 _seed_milestone_edit_version_state(edit_t_key, mil_info)
+                             else:
+                                 _clear_milestone_edit_version_state(edit_t_key)
                              
                         if action_col2.button("🗑️", key=f"delt_{mil_id}_{t_id}"):
-                             del m_tasks[t_id]
-                             save_planned_milestones(pm_data)
-                             st.rerun()
+                             updated_info = copy.deepcopy(mil_info)
+                             del updated_info["tasks"][t_id]
+                             saved, result = save_planned_milestone_entry(
+                                 mil_id,
+                                 updated_info,
+                                 expected_version=get_planned_milestone_version(mil_info),
+                             )
+                             if saved:
+                                 st.rerun()
+                             else:
+                                 st.error(result)
                              
                         if st.session_state.get(edit_t_key, False):
+                            task_base_version = _get_milestone_edit_base_version(edit_t_key, mil_info)
                             et_c1, et_c2, et_c3, et_c4 = st.columns([3, 1, 1, 2])
                             et_desc = et_c1.text_area("Task Description", value=t_info["description"], key=f"etd_{mil_id}_{t_id}")
                             et_name = et_c2.text_input("Name", value=t_id, key=f"etn_{mil_id}_{t_id}")
@@ -2299,20 +2734,32 @@ elif page == "Planned Milestones":
                                 elif new_task_name != t_id and new_task_name in m_tasks:
                                     st.error("A task with this name already exists in this milestone.")
                                 else:
+                                    updated_info = copy.deepcopy(mil_info)
+                                    updated_tasks = updated_info["tasks"]
                                     if new_task_name != t_id:
-                                        m_tasks[new_task_name] = m_tasks.pop(t_id)
-                                        t_info = m_tasks[new_task_name]
-                                        st.session_state[f"edit_t_{mil_id}_{new_task_name}"] = st.session_state.pop(edit_t_key, False)
-                                        edit_t_key = f"edit_t_{mil_id}_{new_task_name}"
-                                        t_id = new_task_name
-                                    t_info["description"] = str(et_desc)
-                                    t_info["time_needed"] = float(et_time)
-                                    t_info["from_date"] = et_s.strftime("%Y-%m-%d")
-                                    t_info["to_date"] = et_e.strftime("%Y-%m-%d")
-                                    save_planned_milestones(pm_data)
-                                    st.session_state[edit_t_key] = False
+                                        updated_tasks[new_task_name] = updated_tasks.pop(t_id)
+                                        target_task = updated_tasks[new_task_name]
+                                    else:
+                                        target_task = updated_tasks[t_id]
+                                    target_task["description"] = str(et_desc)
+                                    target_task["time_needed"] = float(et_time)
+                                    target_task["from_date"] = et_s.strftime("%Y-%m-%d")
+                                    target_task["to_date"] = et_e.strftime("%Y-%m-%d")
+                                    saved, result = save_planned_milestone_entry(
+                                        mil_id,
+                                        updated_info,
+                                        expected_version=task_base_version,
+                                    )
+                                    if saved:
+                                        st.session_state[edit_t_key] = False
+                                        _clear_milestone_edit_version_state(edit_t_key)
+                                        st.success(f"Saved {new_task_name}.")
+                                        st.rerun()
+                                    else:
+                                        st.error(result)
                             if esc2.button("❌", key=f"cst_{mil_id}_{t_id}"):
                                 st.session_state[edit_t_key] = False
+                                _clear_milestone_edit_version_state(edit_t_key)
                                 st.rerun()
 
                         impact_project = str(mil_info.get("project_context", t_info.get("project", ""))).strip()
@@ -2334,11 +2781,20 @@ elif page == "Planned Milestones":
                                     err_cols[1].markdown("**Solution / Fix:**")
                                     err_cols[1].markdown(format_bullet_markdown(solution_text))
                                 if err_cols[2].button("🗑️", key=f"delerr_{mil_id}_{t_id}_{idx}"):
-                                    t_info["time_needed"] = float(t_info.get("time_needed", 0)) - err["hours_spent"]
-                                    mil_info["time_needed"] = float(mil_info.get("time_needed", 0)) - err["hours_spent"]
-                                    t_info["errors"].pop(idx)
-                                    save_planned_milestones(pm_data)
-                                    st.rerun()
+                                    updated_info = copy.deepcopy(mil_info)
+                                    updated_task = updated_info["tasks"][t_id]
+                                    updated_task["time_needed"] = float(updated_task.get("time_needed", 0)) - err["hours_spent"]
+                                    updated_info["time_needed"] = float(updated_info.get("time_needed", 0)) - err["hours_spent"]
+                                    updated_task["errors"].pop(idx)
+                                    saved, result = save_planned_milestone_entry(
+                                        mil_id,
+                                        updated_info,
+                                        expected_version=get_planned_milestone_version(mil_info),
+                                    )
+                                    if saved:
+                                        st.rerun()
+                                    else:
+                                        st.error(result)
             
             # --- Add Task inside Milestone ---
             with st.expander(f"➕ Add Task to {mil_id}", expanded=False):
@@ -2364,7 +2820,9 @@ elif page == "Planned Milestones":
                     elif str(new_t_desc).strip() == "":
                         st.error("Please provide a task description.")
                     else:
-                        m_tasks[task_name] = {
+                        updated_info = copy.deepcopy(mil_info)
+                        updated_info.setdefault("tasks", {})
+                        updated_info["tasks"][task_name] = {
                             "description": str(new_t_desc),
                             "time_needed": float(new_t_time),
                             "from_date": new_t_start.strftime("%Y-%m-%d"),
@@ -2374,14 +2832,19 @@ elif page == "Planned Milestones":
                             "completed": False,
                             "errors": []
                         }
-                        mil_info["tasks"] = m_tasks
-                        save_planned_milestones(pm_data)
-                        
-                        for k in [f"ntname_{mil_id}", f"ntd_{mil_id}", f"ntt_{mil_id}", f"nts_{mil_id}", f"nte_{mil_id}"]:
-                            if k in st.session_state:
-                                del st.session_state[k]
-
-                        st.success(f"Added {task_name} to {mil_id}")
+                        saved, result = save_planned_milestone_entry(
+                            mil_id,
+                            updated_info,
+                            expected_version=get_planned_milestone_version(mil_info),
+                        )
+                        if saved:
+                            for k in [f"ntname_{mil_id}", f"ntd_{mil_id}", f"ntt_{mil_id}", f"nts_{mil_id}", f"nte_{mil_id}"]:
+                                if k in st.session_state:
+                                    del st.session_state[k]
+                            st.success(f"Added {task_name} to {mil_id}")
+                            st.rerun()
+                        else:
+                            st.error(result)
 
             # --- Errors / New Tasks ---
             with st.expander(f"⚠️ Report Errors / Additional Tasks for {mil_id}", expanded=False):
@@ -2397,25 +2860,33 @@ elif page == "Planned Milestones":
                     
                     if st.button("💾 Log Issue & Update Times", key=f"b_err_{mil_id}"):
                         if str(err_desc).strip() != "":
-                            if "errors" not in m_tasks[err_task]:
-                                m_tasks[err_task]["errors"] = []
-                            m_tasks[err_task]["errors"].append({
+                            updated_info = copy.deepcopy(mil_info)
+                            updated_tasks = updated_info.setdefault("tasks", {})
+                            if "errors" not in updated_tasks[err_task]:
+                                updated_tasks[err_task]["errors"] = []
+                            updated_tasks[err_task]["errors"].append({
                                 "description": err_desc,
                                 "solution": err_solution,
                                 "hours_spent": float(err_hrs),
                                 "timing_varied": err_timing
                             })
                             # Auto-update times
-                            m_tasks[err_task]["time_needed"] = float(m_tasks[err_task].get("time_needed", 0)) + float(err_hrs)
-                            mil_info["time_needed"] = float(mil_info.get("time_needed", 0)) + float(err_hrs)
-                            
-                            save_planned_milestones(pm_data)
-                            
-                            for k in [f"errt_{mil_id}", f"errd_{mil_id}", f"errs_{mil_id}", f"errh_{mil_id}", f"errtm_{mil_id}"]:
-                                if k in st.session_state:
-                                    del st.session_state[k]
+                            updated_tasks[err_task]["time_needed"] = float(updated_tasks[err_task].get("time_needed", 0)) + float(err_hrs)
+                            updated_info["time_needed"] = float(updated_info.get("time_needed", 0)) + float(err_hrs)
 
-                            st.success(f"Logged issue to {err_task}. {err_hrs} hrs added to task and milestone totals.")
+                            saved, result = save_planned_milestone_entry(
+                                mil_id,
+                                updated_info,
+                                expected_version=get_planned_milestone_version(mil_info),
+                            )
+                            if saved:
+                                for k in [f"errt_{mil_id}", f"errd_{mil_id}", f"errs_{mil_id}", f"errh_{mil_id}", f"errtm_{mil_id}"]:
+                                    if k in st.session_state:
+                                        del st.session_state[k]
+                                st.success(f"Logged issue to {err_task}. {err_hrs} hrs added to task and milestone totals.")
+                                st.rerun()
+                            else:
+                                st.error(result)
                         else:
                             st.error("Please provide an issue description.")
             st.divider()

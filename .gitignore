@@ -21,12 +21,16 @@ Thumbs.db
 
 # Logs
 *.log
+*.bak
 
 # Data storage (if any large files)
 pmo_storage/**
 !pmo_storage/**/
 !pmo_storage/**/.metadata.json
+data/backups/
+data/backend_sync_state.json
 
 # Secrets
 credentials.json
 token.json
+token.json*
