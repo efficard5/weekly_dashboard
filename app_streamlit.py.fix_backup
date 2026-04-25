@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 import os
 import json
 import mimetypes
-import streamlit.components.v1 as components
 
 
 try:
@@ -40,8 +39,9 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Inject Auto-Bullet Javascript for textareas
-components.html(
+st.html(
     """
+    <div style="display:none"></div>
     <script>
     const doc = window.parent.document;
     if (!doc.getElementById("auto-bullet-script")) {
@@ -96,8 +96,8 @@ components.html(
     }
     </script>
     """,
-    height=0,
-    width=0
+    width="content",
+    unsafe_allow_javascript=True
 )
 
 # --- EXCEL DATA LAYER ---
@@ -257,8 +257,19 @@ def _load_google_drive_credentials():
         except Exception as e:
             print(f"Token refresh failed: {e}")
             creds = None
-            # If token is revoked/invalid, rename it to prevent further attempts
-            if os.path.exists('token.json'):
+            error_text = str(e).lower()
+            should_archive_token = any(
+                marker in error_text
+                for marker in (
+                    "invalid_grant",
+                    "expired or revoked",
+                    "token has been expired or revoked",
+                    "reauth",
+                    "revoked",
+                )
+            )
+            # Only archive tokens that are actually invalid, not when the network is flaky.
+            if should_archive_token and os.path.exists('token.json'):
                 try:
                     os.rename('token.json', 'token.json.bak')
                 except:
@@ -548,11 +559,11 @@ def pull_backend_data_from_drive():
                 try:
                     drive_mtime = datetime.fromisoformat(drive_mtime_str)
                     
-                    # Logic: If local is MUCH newer (more than 5 mins), assume it was saved in THIS session.
-                    # Otherwise, IF Drive is newer OR local looks like original repo file, download.
                     now = datetime.now(timezone.utc)
                     age_seconds = (now - local_mtime).total_seconds()
                     
+                    # Logic: If local is MUCH newer (more than 5 mins), assume it was saved in THIS session.
+                    # Otherwise, IF Drive is newer OR local looks like original repo file, download.
                     if age_seconds < 300: # Saved within last 5 minutes
                         if (local_mtime - drive_mtime).total_seconds() > 2:
                             should_download = False
@@ -1127,7 +1138,7 @@ if st.session_state.role is None:
     with auth_col1:
         st.subheader("👨‍💻 Employee Verification")
         emp_name = st.text_input("Enter your full name", key="emp_n")
-        if st.button("Enter PMO (Employee)", use_container_width=True):
+        if st.button("Enter PMO (Employee)", width="stretch"):
             if str(emp_name).strip() != "":
                 st.session_state.role = "Employee"
                 st.session_state.auth_name = str(emp_name).strip()
@@ -1138,7 +1149,7 @@ if st.session_state.role is None:
     with auth_col2:
         st.subheader("🛡️ Administrator Override")
         admin_pass = st.text_input("Enter Master Node Key", type="password", key="adm_p")
-        if st.button("Enter PMO (Admin)", use_container_width=True):
+        if st.button("Enter PMO (Admin)", width="stretch"):
             if admin_pass == "effica123":
                 st.session_state.role = "Admin"
                 st.session_state.auth_name = "Administrator"
@@ -1182,7 +1193,7 @@ if page == "Dashboard":
     st.subheader(f"Dashboard » {selected_project}")
 
     def render_topic_files(t_proj, t_topic, btn_key=""):
-        with st.popover("📂 Topic Files", use_container_width=True):
+        with st.popover("📂 Topic Files", width="stretch"):
             topic_dir = get_existing_topic_dir(t_proj, t_topic)
             meta_path = os.path.join(topic_dir, ".metadata.json")
             
@@ -1289,7 +1300,7 @@ if page == "Dashboard":
                             with f_col1:
                                 if os.path.exists(file_path):
                                     if file_item.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                                        st.image(file_path, caption=f"{file_item}" + (f" - {f_note}" if f_note else ""), use_container_width=True)
+                                        st.image(file_path, caption=f"{file_item}" + (f" - {f_note}" if f_note else ""), width="stretch")
                                     else:
                                         with open(file_path, "rb") as bf:
                                             lbl_txt = f"📄 {file_item}" + (f" - {f_note}" if f_note else "")
@@ -1353,9 +1364,9 @@ if page == "Dashboard":
             img_path = f"data/topic_images/{selected_project}_{topic}.png"
             if os.path.exists(img_path):
                 # Fallback to local disk image tracking
-                st.image(img_path, use_container_width=True)
+                st.image(img_path, width="stretch")
             elif topic in st.session_state.topic_images:
-                st.image(st.session_state.topic_images[topic], use_container_width=True)
+                st.image(st.session_state.topic_images[topic], width="stretch")
 
             fig = go.Figure(go.Indicator(
                 mode="gauge+number",
@@ -1364,7 +1375,7 @@ if page == "Dashboard":
                 gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#2ecc71"}}
             ))
             fig.update_layout(height=180, margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             
             # Attach Document Drive Popover below Gauge
             render_topic_files(selected_project, topic, btn_key="gauge")
@@ -1395,7 +1406,7 @@ if page == "Dashboard":
             categoryorder="array",
             categoryarray=proj_topics
         )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width="stretch")
     else:
         st.info(f"No tasks added yet for '{selected_project}'. Go to 'Tasks & Milestones' to feed data.")
 
@@ -1483,7 +1494,7 @@ if page == "Dashboard":
             proj_notes["Project_Plans"] = new_pl
             
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("💾 Save All Notes to System", use_container_width=True):
+            if st.button("💾 Save All Notes to System", width="stretch"):
                 save_notes(notes_db)
                 st.success("Updates locked globally!")
         else:
@@ -1560,7 +1571,7 @@ elif page == "Weekly Performance":
                                   text_auto='.1f', labels={'Completion %': 'Average Completion (%)', 'Week_Label': 'Project Week'},
                                   category_orders={"Topic": proj_topics_list, "Week_Label": [f"Wk {start_wk}", f"Wk {end_wk}"] if end_wk != start_wk else [f"Wk {start_wk}"]})
                 fig_week.update_layout(yaxis=dict(range=[0, 100]), height=400)
-                st.plotly_chart(fig_week, use_container_width=True)
+                st.plotly_chart(fig_week, width="stretch")
         else:
             st.markdown(f"**{selected_topic} Progress per Week**")
             frames = []
@@ -1578,7 +1589,7 @@ elif page == "Weekly Performance":
                                   labels={'Completion %': 'Average Completion (%)', 'Week_Label': 'Project Week'},
                                   color="Week_Label", color_discrete_sequence=px.colors.qualitative.Vivid)
                 fig_week.update_layout(yaxis=dict(range=[0, 100]), height=400, showlegend=False)
-                st.plotly_chart(fig_week, use_container_width=True)
+                st.plotly_chart(fig_week, width="stretch")
     else:
         st.info("No active tasks found for the selected weeks.")
 
@@ -2054,7 +2065,7 @@ elif page == "Planned Milestones":
                 )
                 fig.update_yaxes(autorange="reversed")
                 fig.update_layout(height=max(400, len(df_gantt) * 40))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             else:
                 st.info("No valid dates found to generate Gantt chart.")
         else:
@@ -2469,7 +2480,7 @@ elif page == "Image Gallery":
             caption_str = img_file.replace(".png", "").replace("_", " : ")
             with gcols[i % 3]:
                 st.markdown(f"**{caption_str}**")
-                st.image(f"data/topic_images/{img_file}", use_container_width=True)
+                st.image(f"data/topic_images/{img_file}", width="stretch")
                 if st.button(f"🗑️ Erase Link", key=f"del_{img_file}"):
                     os.remove(f"data/topic_images/{img_file}")
                     st.rerun()
@@ -2516,7 +2527,7 @@ elif page == "Competitors & Research":
                 else:
                     df_topic = pd.DataFrame(columns=columns)
                 
-                edited_df = st.data_editor(df_topic, num_rows="dynamic", key=f"editor_{topic}", use_container_width=True)
+                edited_df = st.data_editor(df_topic, num_rows="dynamic", key=f"editor_{topic}", width="stretch")
                 
                 if st.button("💾 Save Table Edits", key=f"save_edits_{topic}"):
                     comp_data[topic] = edited_df.fillna("").to_dict(orient="records")

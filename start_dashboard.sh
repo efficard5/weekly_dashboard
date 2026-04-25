@@ -11,8 +11,12 @@ else
     sleep 3
 fi
 
-# Automatically open the Default Web Browser to the local link
-xdg-open http://localhost:8501
+# Automatically open the default web browser when possible
+if command -v xdg-open > /dev/null 2>&1; then
+    xdg-open http://localhost:8501 > /dev/null 2>&1 || echo "Open http://localhost:8501 in your browser."
+else
+    echo "Open http://localhost:8501 in your browser."
+fi
 
 
 #./start_dashboard.sh
