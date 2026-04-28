@@ -230,6 +230,15 @@ def _run_conflict_resolution_refresh(scope):
     )
 
 
+def _clear_all_milestone_edit_version_state():
+    keys_to_remove = [
+        key for key in st.session_state.keys()
+        if key.endswith("__base_version") or key.endswith("__record_id")
+    ]
+    for key in keys_to_remove:
+        st.session_state.pop(key, None)
+
+
 def render_conflict_resolution_panel():
     notice = str(st.session_state.get(CONFLICT_RESOLUTION_NOTICE_KEY, "")).strip()
     if notice:
@@ -249,6 +258,8 @@ def render_conflict_resolution_panel():
     action_col1, action_col2 = st.columns([2, 1])
     if action_col1.button("Refresh Latest + Keep My Entries", key="conflict_refresh_keep_entries"):
         refreshed = _run_conflict_resolution_refresh(conflict_state.get("scope"))
+        if str(conflict_state.get("scope", "")).strip() == "milestones":
+            _clear_all_milestone_edit_version_state()
         if refreshed:
             st.session_state[CONFLICT_RESOLUTION_NOTICE_KEY] = (
                 "Latest shared data was refreshed. Your current form entries were kept; review the latest values and save again."
