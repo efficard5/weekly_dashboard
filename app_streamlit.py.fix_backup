@@ -107,6 +107,17 @@ BACKEND_SYNC_STATE_PATH = "data/backend_sync_state.json"
 SYNC_CLOCK_SKEW_SECONDS = 2
 PLANNED_MILESTONE_SNAPSHOT_PATH = "data/planned_milestones.json"
 PLANNED_MILESTONE_RECORD_PREFIX = "planned_milestone_record_"
+PLANNED_MILESTONE_AUDIT_LOG_PATH = "data/planned_milestone_audit.jsonl"
+SHARED_DATA_AUDIT_LOG_PATH = "data/shared_data_audit.jsonl"
+PROTECTED_SYSTEM_DATA_FILE_NAMES = {
+    "tasks.xlsx",
+    "project_notes.json",
+    "drive_metadata.json",
+    "competitors.xlsx",
+    os.path.basename(SHARED_DATA_AUDIT_LOG_PATH),
+}
+CONFLICT_RESOLUTION_STATE_KEY = "pending_conflict_resolution"
+CONFLICT_RESOLUTION_NOTICE_KEY = "pending_conflict_resolution_notice"
 
 
 def _utc_now_iso():
@@ -164,6 +175,209 @@ def mark_backend_file_dirty(local_path):
     )
 
 
+def _is_planned_milestone_drive_name(file_name):
+    file_name = str(file_name or "").strip()
+    if file_name == "":
+        return False
+    return (
+        file_name == os.path.basename(PLANNED_MILESTONE_SNAPSHOT_PATH)
+        or file_name == os.path.basename(PLANNED_MILESTONE_AUDIT_LOG_PATH)
+        or file_name.startswith(PLANNED_MILESTONE_RECORD_PREFIX)
+    )
+
+
+def _is_planned_milestone_sync_path(local_path):
+    normalized = _normalize_sync_path(local_path)
+    return _is_planned_milestone_drive_name(os.path.basename(normalized))
+
+
+def _is_protected_system_data_drive_name(file_name):
+    file_name = str(file_name or "").strip()
+    if file_name == "":
+        return False
+    return file_name in PROTECTED_SYSTEM_DATA_FILE_NAMES or _is_planned_milestone_drive_name(file_name)
+
+
+def _is_protected_system_data_sync_path(local_path):
+    normalized = _normalize_sync_path(local_path)
+    return _is_protected_system_data_drive_name(os.path.basename(normalized))
+
+
+def _get_planned_milestone_actor():
+    actor_name = str(st.session_state.get("auth_name") or "Unknown User").strip() or "Unknown User"
+    actor_role = str(st.session_state.get("role") or "Unknown Role").strip() or "Unknown Role"
+    return actor_name, actor_role
+
+
+def queue_conflict_resolution(scope, message):
+    st.session_state[CONFLICT_RESOLUTION_STATE_KEY] = {
+        "scope": str(scope or "").strip() or "shared",
+        "message": str(message or "").strip() or "Conflict detected. Refresh and save again.",
+        "queued_at": _utc_now_iso(),
+    }
+
+
+def _run_conflict_resolution_refresh(scope):
+    scope = str(scope or "").strip()
+    if scope == "milestones":
+        return pull_backend_data_from_drive(
+            file_name_filter=_is_planned_milestone_drive_name,
+            log_result=False,
+        )
+    return pull_backend_data_from_drive(
+        file_name_filter=_is_protected_system_data_drive_name,
+        log_result=False,
+    )
+
+
+def render_conflict_resolution_panel():
+    notice = str(st.session_state.get(CONFLICT_RESOLUTION_NOTICE_KEY, "")).strip()
+    if notice:
+        st.info(notice)
+        st.session_state.pop(CONFLICT_RESOLUTION_NOTICE_KEY, None)
+
+    conflict_state = st.session_state.get(CONFLICT_RESOLUTION_STATE_KEY)
+    if not isinstance(conflict_state, dict):
+        return
+
+    message = str(conflict_state.get("message", "")).strip() or (
+        "Conflict detected. Refresh latest data and save again."
+    )
+    st.warning(
+        message + " Use `Refresh Latest + Keep My Entries` so the newest shared data loads without clearing the values you already typed."
+    )
+    action_col1, action_col2 = st.columns([2, 1])
+    if action_col1.button("Refresh Latest + Keep My Entries", key="conflict_refresh_keep_entries"):
+        refreshed = _run_conflict_resolution_refresh(conflict_state.get("scope"))
+        if refreshed:
+            st.session_state[CONFLICT_RESOLUTION_NOTICE_KEY] = (
+                "Latest shared data was refreshed. Your current form entries were kept; review the latest values and save again."
+            )
+        else:
+            st.session_state[CONFLICT_RESOLUTION_NOTICE_KEY] = (
+                "Refresh could not complete, but your current entries are still kept in the form."
+            )
+        st.session_state.pop(CONFLICT_RESOLUTION_STATE_KEY, None)
+        st.rerun()
+    if action_col2.button("Dismiss", key="conflict_dismiss"):
+        st.session_state.pop(CONFLICT_RESOLUTION_STATE_KEY, None)
+        st.rerun()
+
+
+def _append_shared_data_audit_entry(local_path, action, details=None):
+    os.makedirs("data", exist_ok=True)
+    actor_name, actor_role = _get_planned_milestone_actor()
+    entry = {
+        "timestamp": _utc_now_iso(),
+        "action": str(action or "").strip() or "save",
+        "file_name": os.path.basename(str(local_path or "").strip()),
+        "local_path": _normalize_sync_path(local_path),
+        "actor_name": actor_name,
+        "actor_role": actor_role,
+        "details": details if isinstance(details, dict) else {},
+    }
+    with open(SHARED_DATA_AUDIT_LOG_PATH, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    mark_backend_file_dirty(SHARED_DATA_AUDIT_LOG_PATH)
+    sync_data_file_to_drive(SHARED_DATA_AUDIT_LOG_PATH)
+
+
+def _append_planned_milestone_audit_entry(action, milestone_name, before_info=None, after_info=None, record_id="", version=None, deleted=False):
+    os.makedirs("data", exist_ok=True)
+    actor_name, actor_role = _get_planned_milestone_actor()
+    entry = {
+        "timestamp": _utc_now_iso(),
+        "action": str(action or "").strip() or "update",
+        "milestone_id": str(milestone_name or "").strip(),
+        "record_id": str(record_id or "").strip(),
+        "version": int(version) if version is not None else None,
+        "deleted": bool(deleted),
+        "actor_name": actor_name,
+        "actor_role": actor_role,
+        "before": _strip_planned_milestone_meta(before_info) if isinstance(before_info, dict) else {},
+        "after": _strip_planned_milestone_meta(after_info) if isinstance(after_info, dict) else {},
+    }
+    with open(PLANNED_MILESTONE_AUDIT_LOG_PATH, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    mark_backend_file_dirty(PLANNED_MILESTONE_AUDIT_LOG_PATH)
+    sync_data_file_to_drive(PLANNED_MILESTONE_AUDIT_LOG_PATH)
+
+
+def _system_data_file_name_filter(file_name):
+    file_name = os.path.basename(str(file_name or "").strip())
+    return lambda candidate_name: os.path.basename(str(candidate_name or "").strip()) == file_name
+
+
+def _get_drive_system_data_file(file_name):
+    file_name = os.path.basename(str(file_name or "").strip())
+    if file_name == "":
+        return None
+    service = get_google_drive_service()
+    if service is None:
+        return None
+    parent_id = ensure_drive_path(["System Data"])
+    if not parent_id:
+        return None
+    escaped_file_name = escape_drive_query_value(file_name)
+    query = (
+        f"name = '{escaped_file_name}' and "
+        f"'{parent_id}' in parents and trashed = false"
+    )
+    results = service.files().list(
+        q=query,
+        spaces="drive",
+        fields="files(id, name, modifiedTime)",
+        pageSize=1,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
+    ).execute()
+    files = results.get("files", [])
+    return files[0] if files else None
+
+
+def _shared_file_conflict_message(local_path, remote_modified_time=""):
+    file_name = os.path.basename(str(local_path or "").strip()) or str(local_path or "shared file")
+    if remote_modified_time:
+        return (
+            f"Conflict detected for {file_name}. Another user updated the shared file first "
+            f"(cloud version at {remote_modified_time}). Refresh the latest data, review it, then save again."
+        )
+    return (
+        f"Conflict detected for {file_name}. The shared cloud version changed and your local copy may be stale. "
+        "Refresh the latest data, review it, then save again."
+    )
+
+
+def _prepare_shared_file_save(local_path):
+    if not _is_protected_system_data_sync_path(local_path):
+        return True, None
+
+    remote_file = _get_drive_system_data_file(os.path.basename(local_path))
+    remote_modified_time = str((remote_file or {}).get("modifiedTime", "")).strip()
+    sync_entry = load_backend_sync_state().get("files", {}).get(_normalize_sync_path(local_path), {})
+    known_drive_modified_time = str(sync_entry.get("last_drive_modified_time", "")).strip()
+
+    if remote_modified_time and known_drive_modified_time and remote_modified_time != known_drive_modified_time:
+        pull_backend_data_from_drive(
+            file_name_filter=_system_data_file_name_filter(local_path),
+            log_result=False,
+        )
+        message = _shared_file_conflict_message(local_path, remote_modified_time)
+        queue_conflict_resolution("shared", message)
+        return False, message
+
+    if remote_modified_time and not known_drive_modified_time and os.path.exists(local_path):
+        pull_backend_data_from_drive(
+            file_name_filter=_system_data_file_name_filter(local_path),
+            log_result=False,
+        )
+        message = _shared_file_conflict_message(local_path, remote_modified_time)
+        queue_conflict_resolution("shared", message)
+        return False, message
+
+    return True, None
+
+
 def _planned_milestone_record_path(record_id):
     return os.path.join("data", f"{PLANNED_MILESTONE_RECORD_PREFIX}{record_id}.json")
 
@@ -212,7 +426,7 @@ def _planned_milestone_conflict_message(milestone_name, latest_info):
     version = latest_meta.get("version", "?")
     return (
         f"Conflict detected for {milestone_name}. Another user updated it first "
-        f"(version {version}, updated {updated_at}). Refresh the page, review the latest values, then save again."
+        f"(version {version}, updated {updated_at}). Refresh the latest data, review the newest values, then save again."
     )
 
 
@@ -342,12 +556,15 @@ def save_planned_milestone_entry(milestone_name, mil_info, expected_version=None
     if milestone_name == "":
         return False, "Please provide a milestone name."
 
+    pull_backend_data_from_drive(file_name_filter=_is_planned_milestone_drive_name, log_result=False)
     current_data = load_planned_milestones()
     current_info = current_data.get(previous_name)
     current_version = get_planned_milestone_version(current_info)
 
     if expected_version is not None and current_version != int(expected_version):
-        return False, _planned_milestone_conflict_message(previous_name, current_info)
+        message = _planned_milestone_conflict_message(previous_name, current_info)
+        queue_conflict_resolution("milestones", message)
+        return False, message
 
     if milestone_name != previous_name and milestone_name in current_data:
         return False, "A milestone with this name already exists. Please choose a different name."
@@ -372,12 +589,22 @@ def save_planned_milestone_entry(milestone_name, mil_info, expected_version=None
         del current_data[previous_name]
     current_data[milestone_name] = saved_info
     _write_planned_milestone_snapshot(current_data)
+    _append_planned_milestone_audit_entry(
+        action="save",
+        milestone_name=milestone_name,
+        before_info=current_info,
+        after_info=saved_info,
+        record_id=record_id,
+        version=next_version,
+        deleted=False,
+    )
     log_activity(f"Updated planned milestone {milestone_name}")
     return True, saved_info
 
 
 def delete_planned_milestone_entry(milestone_name, expected_version=None):
     milestone_name = str(milestone_name or "").strip()
+    pull_backend_data_from_drive(file_name_filter=_is_planned_milestone_drive_name, log_result=False)
     current_data = load_planned_milestones()
     current_info = current_data.get(milestone_name)
     if current_info is None:
@@ -385,7 +612,9 @@ def delete_planned_milestone_entry(milestone_name, expected_version=None):
 
     current_version = get_planned_milestone_version(current_info)
     if expected_version is not None and current_version != int(expected_version):
-        return False, _planned_milestone_conflict_message(milestone_name, current_info)
+        message = _planned_milestone_conflict_message(milestone_name, current_info)
+        queue_conflict_resolution("milestones", message)
+        return False, message
 
     record_id = get_planned_milestone_record_id(current_info)
     if record_id == "" or record_id.startswith("legacy::"):
@@ -394,6 +623,15 @@ def delete_planned_milestone_entry(milestone_name, expected_version=None):
     _write_planned_milestone_record(record_id, milestone_name, {}, current_version + 1, deleted=True)
     del current_data[milestone_name]
     _write_planned_milestone_snapshot(current_data)
+    _append_planned_milestone_audit_entry(
+        action="delete",
+        milestone_name=milestone_name,
+        before_info=current_info,
+        after_info={},
+        record_id=record_id,
+        version=current_version + 1,
+        deleted=True,
+    )
     log_activity(f"Deleted planned milestone {milestone_name}")
     return True, None
 
@@ -450,12 +688,22 @@ def load_data():
     return pd.DataFrame(columns=required_cols)
 
 def save_data(data_df):
+    save_ok, message = _prepare_shared_file_save("data/tasks.xlsx")
+    if not save_ok:
+        st.error(message)
+        return False
     os.makedirs("data", exist_ok=True)
     data_df.to_excel("data/tasks.xlsx", index=False)
     mark_backend_file_dirty("data/tasks.xlsx")
     sync_data_file_to_drive("data/tasks.xlsx")
+    _append_shared_data_audit_entry(
+        "data/tasks.xlsx",
+        "save",
+        {"rows": int(len(data_df.index)), "columns": [str(c) for c in data_df.columns]},
+    )
     log_activity("Updated tasks.xlsx")
     st.cache_data.clear()  # Ensure the next load reflects the newly saved data
+    return True
 
 def load_notes():
     if os.path.exists("data/project_notes.json"):
@@ -464,12 +712,22 @@ def load_notes():
     return {}
 
 def save_notes(notes):
+    save_ok, message = _prepare_shared_file_save("data/project_notes.json")
+    if not save_ok:
+        st.error(message)
+        return False
     os.makedirs("data", exist_ok=True)
     with open("data/project_notes.json", "w") as f:
         json.dump(notes, f, indent=4)
     mark_backend_file_dirty("data/project_notes.json")
     sync_data_file_to_drive("data/project_notes.json")
+    _append_shared_data_audit_entry(
+        "data/project_notes.json",
+        "save",
+        {"projects": sorted([str(k) for k in notes.keys()]) if isinstance(notes, dict) else []},
+    )
     log_activity("Updated project_notes.json")
+    return True
 
 def load_drive_metadata():
     if os.path.exists("data/drive_metadata.json"):
@@ -478,12 +736,22 @@ def load_drive_metadata():
     return {}
 
 def save_drive_metadata(data):
+    save_ok, message = _prepare_shared_file_save("data/drive_metadata.json")
+    if not save_ok:
+        st.error(message)
+        return False
     os.makedirs("data", exist_ok=True)
     with open("data/drive_metadata.json", "w") as f:
         json.dump(data, f, indent=4)
     mark_backend_file_dirty("data/drive_metadata.json")
     sync_data_file_to_drive("data/drive_metadata.json")
+    _append_shared_data_audit_entry(
+        "data/drive_metadata.json",
+        "save",
+        {"projects": sorted([str(k) for k in data.keys()]) if isinstance(data, dict) else []},
+    )
     log_activity("Updated drive_metadata.json")
+    return True
 
 def load_competitor_data():
     file_path = "data/competitors.xlsx"
@@ -507,6 +775,10 @@ def load_competitor_data():
     return {}
 
 def save_competitor_data(data):
+    save_ok, message = _prepare_shared_file_save("data/competitors.xlsx")
+    if not save_ok:
+        st.error(message)
+        return False
     os.makedirs("data", exist_ok=True)
     file_path = "data/competitors.xlsx"
     import pandas as pd
@@ -524,10 +796,17 @@ def save_competitor_data(data):
                         
         mark_backend_file_dirty(file_path)
         sync_data_file_to_drive(file_path)
+        _append_shared_data_audit_entry(
+            file_path,
+            "save",
+            {"topics": sorted([str(k) for k in data.keys()]) if isinstance(data, dict) else []},
+        )
         log_activity("Updated competitors.xlsx")
+        return True
     except Exception as e:
         import streamlit as st
         st.error(f"Failed to save excel: {e}")
+        return False
 
 GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 AUTO_SYNC_INTERVAL_SECONDS = 60
@@ -769,14 +1048,14 @@ def upload_bytes_to_drive(path_parts, file_name, file_bytes, mime_type=None):
         file_obj = service.files().update(
             fileId=existing[0]["id"],
             media_body=media,
-            fields="id, webViewLink",
+            fields="id, webViewLink, modifiedTime",
             supportsAllDrives=True
         ).execute()
     else:
         file_obj = service.files().create(
             body=metadata,
             media_body=media,
-            fields="id, webViewLink",
+            fields="id, webViewLink, modifiedTime",
             supportsAllDrives=True
         ).execute()
     return file_obj
@@ -825,6 +1104,7 @@ def sync_data_file_to_drive(local_path):
                     last_upload_ok_at=_utc_now_iso(),
                     last_upload_error=None,
                     drive_file_id=drive_file.get("id"),
+                    last_drive_modified_time=drive_file.get("modifiedTime"),
                 )
                 return True
         update_backend_sync_state(
@@ -844,43 +1124,56 @@ def sync_data_file_to_drive(local_path):
 
 
 
-def pull_backend_data_from_drive():
+def pull_backend_data_from_drive(file_name_filter=None, log_result=True):
     """Download all core data files from Drive to local data/ folder on startup.
     Includes backup logic and basic conflict avoidance."""
     if not google_drive_is_ready():
-        log_activity("Sync check: Drive not ready.")
-        st.session_state.last_backend_sync_ok = False
-        st.session_state.last_backend_sync_message = "Drive is not ready. Showing local data."
+        if log_result:
+            log_activity("Sync check: Drive not ready.")
+            st.session_state.last_backend_sync_ok = False
+            st.session_state.last_backend_sync_message = "Drive is not ready. Showing local data."
         return False
     
     service = get_google_drive_service()
     parent_id = ensure_drive_path(["System Data"])
     if not parent_id:
-        st.sidebar.error("Could not find or create 'System Data' folder on Drive.")
-        st.session_state.last_backend_sync_ok = False
-        st.session_state.last_backend_sync_message = "Drive folder is unavailable. Showing local data."
+        if log_result:
+            st.sidebar.error("Could not find or create 'System Data' folder on Drive.")
+            st.session_state.last_backend_sync_ok = False
+            st.session_state.last_backend_sync_message = "Drive folder is unavailable. Showing local data."
         return False
         
     try:
-        results = service.files().list(
-            q=f"'{parent_id}' in parents and trashed = false",
-            fields="files(id, name, modifiedTime)"
-        ).execute()
-        files = results.get("files", [])
+        files = []
+        page_token = None
+        while True:
+            results = service.files().list(
+                q=f"'{parent_id}' in parents and trashed = false",
+                fields="nextPageToken, files(id, name, modifiedTime)",
+                pageSize=1000,
+                pageToken=page_token
+            ).execute()
+            files.extend(results.get("files", []))
+            page_token = results.get("nextPageToken", None)
+            if page_token is None:
+                break
         
         import io
         import shutil
         from datetime import datetime, timezone
         if not MediaIoBaseDownload:
             return False
-            
+        
         os.makedirs("data", exist_ok=True)
         
         success_count = 0
         sync_state = load_backend_sync_state().get("files", {})
+        protected_skip_count = 0
         for f in files:
             file_id = f['id']
             file_name = f['name']
+            if file_name_filter is not None and not file_name_filter(file_name):
+                continue
             local_path = os.path.join("data", file_name)
             
             # Critical Conflict Prevention for Streamlit Cloud:
@@ -890,10 +1183,22 @@ def pull_backend_data_from_drive():
                 local_mtime = datetime.fromtimestamp(os.path.getmtime(local_path), tz=timezone.utc)
                 drive_mtime_str = f.get('modifiedTime', '').replace('Z', '+00:00')
                 sync_entry = sync_state.get(_normalize_sync_path(local_path), {})
+                is_protected_shared_file = _is_protected_system_data_sync_path(local_path)
                 try:
                     drive_mtime = datetime.fromisoformat(drive_mtime_str)
 
-                    if sync_entry.get("pending_upload"):
+                    if is_protected_shared_file:
+                        if sync_entry.get("pending_upload"):
+                            should_download = False
+                            protected_skip_count += 1
+                        else:
+                            last_known_drive_mtime = str(sync_entry.get("last_drive_modified_time", "")).strip()
+                            should_download = (
+                                last_known_drive_mtime == ""
+                                or last_known_drive_mtime != drive_mtime_str
+                                or abs((local_mtime - drive_mtime).total_seconds()) > SYNC_CLOCK_SKEW_SECONDS
+                            )
+                    elif sync_entry.get("pending_upload"):
                         should_download = False
                         try:
                             sync_data_file_to_drive(local_path)
@@ -909,8 +1214,8 @@ def pull_backend_data_from_drive():
                             pass
                     else:
                         should_download = False
-                except:
-                    pass
+                except Exception:
+                    should_download = is_protected_shared_file
 
             if should_download:
                 try:
@@ -944,18 +1249,25 @@ def pull_backend_data_from_drive():
                     
                     success_count += 1
                 except Exception as e:
-                    st.sidebar.warning(f"Failed to download {file_name}: {e}")
+                    if log_result:
+                        st.sidebar.warning(f"Failed to download {file_name}: {e}")
         
         st.cache_data.clear()
-        sync_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_activity(f"Pull completed: {success_count} files updated.")
-        st.session_state.last_backend_sync_ok = True
-        st.session_state.last_backend_sync_message = f"Last Drive sync: {sync_time}"
+        if log_result:
+            sync_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_activity(f"Pull completed: {success_count} files updated.")
+            st.session_state.last_backend_sync_ok = True
+            st.session_state.last_backend_sync_message = f"Last Drive sync: {sync_time}"
+            if protected_skip_count > 0:
+                st.session_state.last_backend_sync_message += (
+                    f" | Shared data sync protection held back {protected_skip_count} local pending file(s)."
+                )
         return True
     except Exception as e:
-        st.sidebar.error(f"Drive pull error: {e}")
-        st.session_state.last_backend_sync_ok = False
-        st.session_state.last_backend_sync_message = f"Drive sync failed: {e}"
+        if log_result:
+            st.sidebar.error(f"Drive pull error: {e}")
+            st.session_state.last_backend_sync_ok = False
+            st.session_state.last_backend_sync_message = f"Drive sync failed: {e}"
         if hasattr(get_google_drive_service, "clear"):
             get_google_drive_service.clear()
         return False
@@ -1555,6 +1867,8 @@ if st.session_state.role == "Admin":
     nav_options.append("Document Drive")
 page = st.sidebar.selectbox("Navigation", nav_options)
 
+render_conflict_resolution_panel()
+
 # ─────────────────────────────────────────────
 # DASHBOARD PAGE
 # ─────────────────────────────────────────────
@@ -1880,8 +2194,8 @@ if page == "Dashboard":
             
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("💾 Save All Notes to System", width="stretch"):
-                save_notes(notes_db)
-                st.success("Updates locked globally!")
+                if save_notes(notes_db):
+                    st.success("Updates locked globally!")
         else:
             st.markdown("#### ⚠️ Project Issues")
             st.markdown(format_bullet_markdown(proj_notes["Project_Issues"]))
@@ -2081,8 +2395,8 @@ elif page == "Tasks & Milestones":
                     if drive_failures:
                         st.warning("Milestone files saved locally, but some Drive syncs failed: " + " | ".join(drive_failures[:3]))
                             
-                save_data(df)
-                st.success(f"Successfully integrated '{t_name}' under '{actual_topic}' in '{actual_proj}'!")
+                if save_data(df):
+                    st.success(f"Successfully integrated '{t_name}' under '{actual_topic}' in '{actual_proj}'!")
 
     st.divider()
 
@@ -2245,14 +2559,14 @@ elif page == "Tasks & Milestones":
                     hide_help  = "Unhide task" if is_hidden else "Hide task"
                     if rcols[11].button(hide_label, key=f"btn_hide_{idx}", help=hide_help):
                         df.at[idx, "Hidden"] = not is_hidden
-                        save_data(df)
-                        st.rerun()
+                        if save_data(df):
+                            st.rerun()
 
                     # DELETE
                     if rcols[12].button("🗑️", key=f"btn_del_{idx}", help="Delete task"):
                         df = df.drop(index=idx).reset_index(drop=True)
-                        save_data(df)
-                        st.rerun()
+                        if save_data(df):
+                            st.rerun()
 
                 # INLINE EDITOR — Admin only
                 if st.session_state.role == "Admin" and st.session_state.get(edit_key, False):
@@ -2352,11 +2666,10 @@ elif page == "Tasks & Milestones":
                                     if drive_failures:
                                         st.warning("Supplemental files saved locally, but some Drive syncs failed: " + " | ".join(drive_failures[:3]))
                                             
-                                save_data(df)
-                                remember_week_context(new_proj, new_week)
-                                
-                                st.session_state[edit_key] = False
-                                st.success("Network state formally updated!")
+                                if save_data(df):
+                                    remember_week_context(new_proj, new_week)
+                                    st.session_state[edit_key] = False
+                                    st.success("Network state formally updated!")
                         if cancel_col.button("✖ Abort", key=f"cancel_{idx}"):
                             st.session_state[edit_key] = False
                             st.rerun()
@@ -2977,8 +3290,8 @@ elif page == "Competitors & Research":
                         c_list = ["Competitor", "Value"]
                     empty_row = {c: "" for c in c_list}
                     comp_data[new_topic] = [empty_row]
-                    save_competitor_data(comp_data)
-                    st.success(f"Topic '{new_topic}' created.")
+                    if save_competitor_data(comp_data):
+                        st.success(f"Topic '{new_topic}' created.")
                 elif new_topic in comp_data:
                     st.error("Topic already exists.")
 
@@ -3004,8 +3317,8 @@ elif page == "Competitors & Research":
                     comp_data[topic] = edited_df.fillna("").to_dict(orient="records")
                     if not comp_data[topic]:
                          comp_data[topic] = [{c: "" for c in columns}]
-                    save_competitor_data(comp_data)
-                    st.success("Table edits saved!")
+                    if save_competitor_data(comp_data):
+                        st.success("Table edits saved!")
 
                 st.markdown("---")
                 st.markdown("**Column Management & Admin Actions**")
@@ -3025,8 +3338,8 @@ elif page == "Competitors & Research":
                                 r[new_col_name] = ""
                             
                             comp_data[topic] = current_rows
-                            save_competitor_data(comp_data)
-                            st.rerun()
+                            if save_competitor_data(comp_data):
+                                st.rerun()
 
                 with col_del:
                     st.markdown("##### ❌ Delete Column")
@@ -3042,16 +3355,16 @@ elif page == "Competitors & Research":
                                     del r[col_to_delete]
                             
                             comp_data[topic] = current_rows
-                            save_competitor_data(comp_data)
-                            st.rerun()
+                            if save_competitor_data(comp_data):
+                                st.rerun()
 
                 st.divider()
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button(f"🗑️ Delete Topic '{topic}'", key=f"del_topic_{topic}", type="primary"):
                     del comp_data[topic]
-                    save_competitor_data(comp_data)
-                    st.rerun()
+                    if save_competitor_data(comp_data):
+                        st.rerun()
             else:
                 if rows:
                     display_rows = [r for r in rows if any(str(v).strip() for v in r.values())]
@@ -3117,8 +3430,8 @@ elif page == "Document Drive":
     if st.button("Attach Link"):
         if str(new_url).strip() != "":
             topic_meta["urls"].append({"url": new_url, "note": new_url_note})
-            save_drive_metadata(drive_meta)
-            st.success("Link attached!")
+            if save_drive_metadata(drive_meta):
+                st.success("Link attached!")
         else:
             st.error("Please enter a URL first.")
 
@@ -3147,12 +3460,12 @@ elif page == "Document Drive":
                     updated_note = c2.text_input("Note", value=url_entry.get("note", ""), key=f"unote_{idx}", label_visibility="collapsed")
                     if c3.button("💾 Save", key=f"su_{idx}"):
                         topic_meta["urls"][idx]["note"] = updated_note
-                        save_drive_metadata(drive_meta)
-                        st.success("Saved!")
+                        if save_drive_metadata(drive_meta):
+                            st.success("Saved!")
                     if c4.button("🗑️ Del", key=f"du_{idx}"):
                         topic_meta["urls"].pop(idx)
-                        save_drive_metadata(drive_meta)
-                        st.rerun()
+                        if save_drive_metadata(drive_meta):
+                            st.rerun()
 
         dir_links = topic_dir_meta.get("links", {})
         if dir_links:
@@ -3218,19 +3531,22 @@ elif page == "Document Drive":
                             topic_dir_meta["files"][file_item] = {}
                         topic_dir_meta["files"][file_item]["note"] = updated_fnote
                         
-                        save_drive_metadata(drive_meta)
-                        with open(meta_path, "w") as mf:
-                            json.dump(topic_dir_meta, mf, indent=4)
-                        st.success("Saved!")
+                        if save_drive_metadata(drive_meta):
+                            with open(meta_path, "w") as mf:
+                                json.dump(topic_dir_meta, mf, indent=4)
+                            st.success("Saved!")
                     if c4.button("🗑️ Del", key=f"df_{idx}"):
                         if os.path.exists(file_path):
                             try:
                                 os.remove(file_path)
                             except:
                                 pass
+                        meta_saved = True
                         if file_item in topic_meta.get("file_notes", {}):
                             del topic_meta["file_notes"][file_item]
-                            save_drive_metadata(drive_meta)
+                            meta_saved = save_drive_metadata(drive_meta)
+                        if not meta_saved:
+                            continue
                         if "files" in topic_dir_meta and file_item in topic_dir_meta["files"]:
                             del topic_dir_meta["files"][file_item]
                             with open(meta_path, "w") as mf:
