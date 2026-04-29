@@ -1617,6 +1617,43 @@ def build_topic_progress_df(task_df):
     topic_progress_df["Topic"] = pd.Categorical(topic_progress_df["Topic"], categories=ordered_topic_names, ordered=True)
     return topic_progress_df.sort_values("Topic").reset_index(drop=True)
 
+def get_concept_family_projects(project_name, data_df=None, registry=None):
+    project_name = clean_label(project_name)
+    if project_name == "" or "concept" not in project_name.lower():
+        return [project_name] if project_name else []
+
+    combined_projects = []
+    registry = PROJECT_TOPIC_REGISTRY if registry is None else registry
+    if isinstance(registry, dict):
+        combined_projects.extend(registry.keys())
+    if data_df is not None and not data_df.empty and "Project" in data_df.columns:
+        combined_projects.extend(clean_label(project) for project in data_df["Project"].dropna().unique())
+
+    normalized_target = project_name.lower().replace(" ", "").replace("-", "").replace("_", "")
+    if "concept" not in normalized_target:
+        return [project_name]
+
+    concept_index = normalized_target.find("concept")
+    family_prefix = normalized_target[:concept_index]
+    if family_prefix == "":
+        family_prefix = normalized_target
+
+    family_projects = []
+    for candidate in combined_projects:
+        candidate = clean_label(candidate)
+        if candidate == "":
+            continue
+        normalized_candidate = candidate.lower().replace(" ", "").replace("-", "").replace("_", "")
+        if "concept" not in normalized_candidate:
+            continue
+        candidate_index = normalized_candidate.find("concept")
+        candidate_prefix = normalized_candidate[:candidate_index] if candidate_index != -1 else normalized_candidate
+        if candidate_prefix == family_prefix:
+            family_projects.append(candidate)
+
+    concept_projects = list(dict.fromkeys(family_projects))
+    return concept_projects or [project_name]
+
 def get_project_topics(project_name, data_df=None, registry=None):
     project_name = clean_label(project_name)
     if project_name == "":
@@ -1624,16 +1661,67 @@ def get_project_topics(project_name, data_df=None, registry=None):
 
     combined_topics = []
     registry = PROJECT_TOPIC_REGISTRY if registry is None else registry
-    if isinstance(registry, dict):
-        combined_topics.extend(registry.get(project_name, []))
+    candidate_projects = get_concept_family_projects(project_name, data_df, registry)
+    for candidate_project in candidate_projects:
+        if isinstance(registry, dict):
+            combined_topics.extend(registry.get(candidate_project, []))
 
-    if data_df is not None and not data_df.empty:
-        combined_topics.extend(
-            clean_label(topic)
-            for topic in data_df[data_df["Project"] == project_name]["Topic"].dropna().unique()
-        )
+        if data_df is not None and not data_df.empty:
+            combined_topics.extend(
+                clean_label(topic)
+                for topic in data_df[data_df["Project"] == candidate_project]["Topic"].dropna().unique()
+            )
 
     return order_topics(combined_topics)
+
+def infer_milestone_project(milestone_name, mil_info, data_df=None, registry=None):
+    milestone_name = clean_label(milestone_name)
+    explicit_project = clean_label(mil_info.get("project_context", "")) if isinstance(mil_info, dict) else ""
+    available_projects = []
+    registry = PROJECT_TOPIC_REGISTRY if registry is None else registry
+    if isinstance(registry, dict):
+        available_projects.extend(registry.keys())
+    if data_df is not None and not data_df.empty and "Project" in data_df.columns:
+        available_projects.extend(clean_label(project) for project in data_df["Project"].dropna().unique())
+    available_projects = [project for project in dict.fromkeys(available_projects) if project != ""]
+
+    normalized_name = milestone_name.lower().replace(" ", "").replace("-", "").replace("_", "")
+    concept_candidates = []
+    if "concept1" in normalized_name:
+        concept_candidates = [project for project in available_projects if "concept-1" in project.lower() or "single robot" in project.lower()]
+    elif "concept2" in normalized_name:
+        concept_candidates = [project for project in available_projects if "concept-2" in project.lower() or "dual robot" in project.lower()]
+
+    if concept_candidates:
+        return concept_candidates[0]
+    return explicit_project
+
+def get_milestone_fallback_tasks(milestone_name, mil_info, data_df):
+    if data_df is None or data_df.empty:
+        return pd.DataFrame()
+    milestone_project = infer_milestone_project(milestone_name, mil_info, data_df)
+    if milestone_project == "":
+        return pd.DataFrame()
+    fallback_df = data_df[data_df["Project"] == milestone_project].copy()
+    if fallback_df.empty:
+        return fallback_df
+    fallback_df["Start Date"] = pd.to_datetime(fallback_df["Start Date"], errors="coerce")
+    fallback_df["End Date"] = pd.to_datetime(fallback_df["End Date"], errors="coerce")
+    milestone_start = pd.to_datetime(mil_info.get("from_date", ""), errors="coerce")
+    milestone_end = pd.to_datetime(mil_info.get("to_date", ""), errors="coerce")
+    if pd.notna(milestone_start) and pd.notna(milestone_end):
+        fallback_df = fallback_df[
+            (fallback_df["End Date"].isna() | (fallback_df["End Date"] >= milestone_start)) &
+            (fallback_df["Start Date"].isna() | (fallback_df["Start Date"] <= milestone_end))
+        ]
+    return fallback_df
+
+def get_project_scope_df(project_name, data_df):
+    if data_df is None or data_df.empty:
+        return pd.DataFrame(columns=getattr(data_df, "columns", []))
+    candidate_projects = get_concept_family_projects(project_name, data_df, PROJECT_TOPIC_REGISTRY)
+    scoped_df = data_df[data_df["Project"].isin(candidate_projects)].copy()
+    return scoped_df
 
 def get_milestone_topic(mil_info):
     explicit_topic = str(mil_info.get("topic", "")).strip()
@@ -2057,7 +2145,7 @@ if page == "Dashboard":
     st.divider()
 
     # Filter dataframe exclusively to this project
-    proj_df = df[df["Project"] == selected_project]
+    proj_df = get_project_scope_df(selected_project, df)
     
     # Topics specific to this project
     proj_topics = get_project_topics(selected_project, df)
@@ -2066,19 +2154,6 @@ if page == "Dashboard":
     topic_adjustments = get_planned_topic_adjustments(selected_project, pm_data)
 
     st.subheader(f"Dashboard » {selected_project}")
-    active_project_milestones = [
-        (mil_id, mil_info)
-        for mil_id, mil_info in pm_data.items()
-        if is_project_match(mil_info.get("project_context", ""), selected_project)
-        and not bool(mil_info.get("completed", False))
-    ]
-
-    if active_project_milestones:
-        st.markdown("#### Active Planned Milestones")
-        for mil_id, mil_info in active_project_milestones:
-            render_dashboard_milestone_summary(mil_id, mil_info)
-            st.markdown("---")
-
     def render_topic_files(t_proj, t_topic, btn_key=""):
         with st.popover("📂 Topic Files", width="stretch"):
             topic_dir = get_existing_topic_dir(t_proj, t_topic)
@@ -2408,7 +2483,7 @@ elif page == "Weekly Performance":
     
     st.divider()
     
-    proj_df = df[df["Project"] == selected_project]
+    proj_df = get_project_scope_df(selected_project, df)
     if selected_topic != "All Topics":
         proj_df = proj_df[proj_df["Topic"] == selected_topic]
     
@@ -2901,7 +2976,7 @@ elif page == "Planned Milestones":
             end = mil_info.get("to_date", "")
             if not start or not end: continue
             
-            project = mil_info.get("project_context", "Unassigned")
+            project = infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY) or mil_info.get("project_context", "Unassigned")
             completed = "Completed" if mil_info.get("completed", False) else "Planned"
             
             gantt_data.append(dict(
@@ -3061,7 +3136,7 @@ elif page == "Planned Milestones":
                 e_m_desc = em_c1.text_area("Description", value=mil_info["description"], key=f"emd_{mil_id}")
                 e_m_name = em_c2.text_input("Name", value=mil_id, key=f"emn_{mil_id}")
                 e_m_time = em_c3.number_input("Time Needed (Hours)", min_value=0.0, step=0.5, value=float(mil_info.get("time_needed", 0)), key=f"emt_{mil_id}")
-                current_m_project = str(mil_info.get("project_context", "")).strip()
+                current_m_project = infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY)
                 project_context_options = projects.copy()
                 if current_m_project and current_m_project not in project_context_options:
                     project_context_options.append(current_m_project)
@@ -3131,8 +3206,9 @@ elif page == "Planned Milestones":
                 md_c1.markdown(format_bullet_markdown(mil_info.get("description", "")))
                 topic_inc_display = get_milestone_topic_increases(mil_info)
                 inc_lines = "  \n".join([f"**+{v:.0f}%** {t}" for t, v in topic_inc_display.items() if v > 0]) or "No increase set"
+                display_project = infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY) or mil_info.get("project_context", "Not linked")
                 md_c2.markdown(
-                    f"**Project:** {mil_info.get('project_context', 'Not linked')}  \n"
+                    f"**Project:** {display_project}  \n"
                     f"**Time:** {mil_info.get('time_needed', 0)} Hrs  \n"
                     f"**Dates:** {mil_info.get('from_date', '')} to {mil_info.get('to_date', '')}  \n"
                     f"**Topic Increases:**  \n{inc_lines}"
@@ -3155,7 +3231,17 @@ elif page == "Planned Milestones":
             m_tasks = mil_info.get("tasks", {})
             with st.expander(f"#### Tasks {mil_id}", expanded=False):
                 if not m_tasks:
-                    st.info("No tasks added yet for this milestone.")
+                    fallback_tasks = get_milestone_fallback_tasks(mil_id, mil_info, df)
+                    if fallback_tasks.empty:
+                        st.info("No tasks added yet for this milestone.")
+                    else:
+                        st.info("No milestone task records found. Showing linked task rows from the related project.")
+                        display_cols = [col for col in ["Topic", "Task Name", "Start Date", "End Date", "Week", "Status"] if col in fallback_tasks.columns]
+                        fallback_view = fallback_tasks[display_cols].copy()
+                        for date_col in ["Start Date", "End Date"]:
+                            if date_col in fallback_view.columns:
+                                fallback_view[date_col] = pd.to_datetime(fallback_view[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
+                        st.dataframe(fallback_view, width="stretch", hide_index=True)
                 for t_id, t_info in list(m_tasks.items()):
                     with st.container():
                         row_col1, row_col2, row_col3 = st.columns([4.2, 1.5, 1.8])
@@ -3263,7 +3349,7 @@ elif page == "Planned Milestones":
                                 _clear_milestone_edit_version_state(edit_t_key)
                                 st.rerun()
 
-                        impact_project = str(mil_info.get("project_context", t_info.get("project", ""))).strip()
+                        impact_project = clean_label(t_info.get("project", "")) or infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY)
                         current_topic = str(t_info.get("topic", "")).strip()
                         topic_label = current_topic if current_topic else "Not linked"
                         project_label = impact_project if impact_project else "Not linked"
@@ -3299,7 +3385,7 @@ elif page == "Planned Milestones":
             
             # --- Add Task inside Milestone ---
             with st.expander(f"➕ Add Task to {mil_id}", expanded=False):
-                milestone_project = str(mil_info.get("project_context", "")).strip()
+                milestone_project = infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY)
                 t_c1, t_c2, t_c3, t_c5 = st.columns([2, 3, 1, 3])
                 new_t_name = t_c1.text_input("Task Name", key=f"ntname_{mil_id}")
                 new_t_desc = t_c2.text_area("Task Description", key=f"ntd_{mil_id}")
