@@ -24,6 +24,11 @@ except ImportError:
     MediaIoBaseUpload = None
 
 
+BASE_PROJECTS = ["Truck Unloading Project"]
+BASE_TOPICS = ["Robot", "Vision System", "Conveyor", "AGV", "EOAT", "Vacuum System", "Container", "Objects"]
+PROJECT_TOPIC_REGISTRY = {}
+
+
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Industrial Automation PMO", layout="wide")
@@ -101,7 +106,7 @@ components.html(
 
 # --- EXCEL DATA LAYER ---
 @st.cache_data
-def load_data():
+def load_data(_file_mtime=None):
     file_path = "data/tasks.xlsx"
     legacy_project_names = {
         "Default Project": "Truck Unloading Project",
@@ -112,7 +117,7 @@ def load_data():
         "Completion %", "Status", "Employee", "Week", "Hidden",
         "Milestone_Text", "Milestone_Role", "Milestone_Author_Name"
     ]
-    
+
     if os.path.exists(file_path):
         df = pd.read_excel(file_path)
         needs_save = False
@@ -568,9 +573,13 @@ def aggregate_topic_completion(topic_df):
     incremental_progress = float(completion_values[completion_values < base_progress].sum())
     return min(100.0, round(base_progress + incremental_progress, 1))
 
+def clean_label(value):
+    text = str(value or "").strip()
+    return "" if text.lower() == "nan" else text
+
 def order_topics(topic_values):
-    topic_list = [str(topic).strip() for topic in topic_values if str(topic).strip() != ""]
-    preferred_order = {topic: idx for idx, topic in enumerate(topics)}
+    topic_list = [clean_label(topic) for topic in topic_values if clean_label(topic) != ""]
+    preferred_order = {topic: idx for idx, topic in enumerate(BASE_TOPICS)}
     forced_last_topics = {"Container", "Objects"}
     return sorted(
         list(dict.fromkeys(topic_list)),
@@ -580,6 +589,76 @@ def order_topics(topic_values):
             topic.lower()
         )
     )
+
+def register_project_topic(project_map, project_name, topic_name=""):
+    project_name = clean_label(project_name)
+    topic_name = clean_label(topic_name)
+    if project_name == "":
+        return
+    if project_name not in project_map:
+        project_map[project_name] = []
+    if topic_name and topic_name not in project_map[project_name]:
+        project_map[project_name].append(topic_name)
+
+def build_project_topic_registry(data_df, milestones=None, notes_db=None, storage_root="pmo_storage"):
+    project_map = {}
+
+    for base_project in BASE_PROJECTS:
+        register_project_topic(project_map, base_project)
+
+    if data_df is not None and not data_df.empty:
+        for _, row in data_df.iterrows():
+            register_project_topic(project_map, row.get("Project", ""), row.get("Topic", ""))
+
+    for mil_info in (milestones or {}).values():
+        milestone_project = clean_label(mil_info.get("project_context", ""))
+        register_project_topic(project_map, milestone_project)
+
+        for topic_name in get_milestone_topic_increases(mil_info).keys():
+            if topic_name != "All Topics":
+                register_project_topic(project_map, milestone_project, topic_name)
+
+        milestone_topic = clean_label(get_milestone_topic(mil_info))
+        if milestone_topic and milestone_topic != "All Topics":
+            register_project_topic(project_map, milestone_project, milestone_topic)
+
+        for task_info in mil_info.get("tasks", {}).values():
+            task_project = clean_label(task_info.get("project", "")) or milestone_project
+            task_topic = clean_label(task_info.get("topic", ""))
+            if task_topic != "All Topics":
+                register_project_topic(project_map, task_project, task_topic)
+            else:
+                register_project_topic(project_map, task_project)
+
+    for project_name, project_info in (notes_db or {}).items():
+        clean_project = clean_label(project_name)
+        register_project_topic(project_map, clean_project)
+        if isinstance(project_info, dict):
+            for topic_name in (project_info.get("Topics", {}) or {}).keys():
+                register_project_topic(project_map, clean_project, topic_name)
+
+    if os.path.isdir(storage_root):
+        for project_name in sorted(os.listdir(storage_root)):
+            project_path = os.path.join(storage_root, project_name)
+            if not os.path.isdir(project_path):
+                continue
+            register_project_topic(project_map, project_name)
+            for topic_name in sorted(os.listdir(project_path)):
+                topic_path = os.path.join(project_path, topic_name)
+                if os.path.isdir(topic_path):
+                    register_project_topic(project_map, project_name, topic_name)
+
+    ordered_projects = list(dict.fromkeys(BASE_PROJECTS + list(project_map.keys())))
+    ordered_project_map = {
+        project_name: order_topics(topic_names)
+        for project_name, topic_names in project_map.items()
+    }
+    all_topics = []
+    for topic_names in ordered_project_map.values():
+        all_topics.extend(topic_names)
+    ordered_topics = order_topics(BASE_TOPICS + all_topics)
+
+    return ordered_projects, ordered_topics, ordered_project_map
 
 def build_topic_progress_df(task_df):
     if task_df.empty:
@@ -592,19 +671,27 @@ def build_topic_progress_df(task_df):
             "Completion %": aggregate_topic_completion(topic_df)
         })
     topic_progress_df = pd.DataFrame(rows)
-    ordered_topics = order_topics(topic_progress_df["Topic"].tolist())
-    topic_progress_df["Topic"] = pd.Categorical(topic_progress_df["Topic"], categories=ordered_topics, ordered=True)
+    ordered_topic_names = order_topics(topic_progress_df["Topic"].tolist())
+    topic_progress_df["Topic"] = pd.Categorical(topic_progress_df["Topic"], categories=ordered_topic_names, ordered=True)
     return topic_progress_df.sort_values("Topic").reset_index(drop=True)
 
-def get_project_topics(project_name, data_df):
-    if str(project_name).strip() == "":
+def get_project_topics(project_name, data_df=None, registry=None):
+    project_name = clean_label(project_name)
+    if project_name == "":
         return []
-    return order_topics(
-        [
-            str(topic)
+
+    combined_topics = []
+    registry = PROJECT_TOPIC_REGISTRY if registry is None else registry
+    if isinstance(registry, dict):
+        combined_topics.extend(registry.get(project_name, []))
+
+    if data_df is not None and not data_df.empty:
+        combined_topics.extend(
+            clean_label(topic)
             for topic in data_df[data_df["Project"] == project_name]["Topic"].dropna().unique()
-        ]
-    )
+        )
+
+    return order_topics(combined_topics)
 
 def get_milestone_topic(mil_info):
     explicit_topic = str(mil_info.get("topic", "")).strip()
@@ -703,6 +790,28 @@ def render_readonly_milestone(mil_id, mil_info):
                         err_cols[0].markdown(format_bullet_markdown(solution_text))
 
             st.markdown("---")
+
+def render_dashboard_milestone_summary(mil_id, mil_info):
+    topic_increases = get_milestone_topic_increases(mil_info)
+    topic_summary = ", ".join(
+        [f"{topic} +{increase:.0f}%" for topic, increase in topic_increases.items() if increase > 0]
+    ) or "No topic increase set"
+
+    info_col1, info_col2, info_col3 = st.columns([3.5, 1.5, 1.5])
+    info_col1.markdown(f"**🎯 {mil_id}**")
+    info_col1.markdown(format_bullet_markdown(mil_info.get("description", "")))
+    info_col2.caption(f"Dates: {mil_info.get('from_date', '')} to {mil_info.get('to_date', '')}")
+    info_col2.caption(f"Time: {mil_info.get('time_needed', 0)} Hrs")
+    info_col3.caption(f"Impact: {topic_summary}")
+    if mil_info.get("tasks", {}):
+        with st.expander(f"View milestone tasks for {mil_id}", expanded=False):
+            for task_id, task_info in mil_info.get("tasks", {}).items():
+                st.markdown(f"**{task_id}**")
+                st.markdown(format_bullet_markdown(task_info.get("description", "")))
+                st.caption(
+                    f"{task_info.get('from_date', '')} to {task_info.get('to_date', '')} | "
+                    f"Topic: {task_info.get('topic', 'Not linked')}"
+                )
 
 def get_completed_milestone_total(project_name, milestones, topic_name="All Topics"):
     total = 0.0
@@ -861,23 +970,17 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
                 st.rerun()
 
 
-df = load_data()
+tasks_file_mtime = os.path.getmtime("data/tasks.xlsx") if os.path.exists("data/tasks.xlsx") else None
+df = load_data(tasks_file_mtime)
+notes_db = load_notes()
+planned_milestones_db = load_planned_milestones()
+projects, topics, PROJECT_TOPIC_REGISTRY = build_project_topic_registry(df, planned_milestones_db, notes_db)
 
 # --- DYNAMIC PROJECTS & TOPICS ---
-# Isolate Projects
-base_projects = ["Truck Unloading Project"]
-saved_projects = [str(p) for p in df['Project'].dropna().unique() if str(p).strip() != ""]
-projects = list(dict.fromkeys(base_projects + saved_projects))
-
 # Isolate Employees
 base_emps = ["Unassigned", "Employee 1", "Employee 2", "Employee 3", "Employee 4"]
 saved_emps = [str(e) for e in df.get('Employee', pd.Series([])).dropna().unique() if str(e).strip() != ""]
 employees = list(dict.fromkeys(base_emps + saved_emps))
-
-# Isolate Topics
-base_topics = ["Robot", "Vision System", "Conveyor", "AGV", "EOAT", "Vacuum System", "Container", "Objects"]
-saved_topics = [str(t) for t in df['Topic'].dropna().unique() if str(t).strip() != ""]
-topics = list(dict.fromkeys(base_topics + saved_topics))
 
 STATUS_OPTIONS = ["Planned", "In Progress", "Completed", "Delayed"]
 
@@ -953,12 +1056,24 @@ if page == "Dashboard":
     proj_df = df[df["Project"] == selected_project]
     
     # Topics specific to this project
-    proj_topics = order_topics(proj_df['Topic'].dropna().unique())
+    proj_topics = get_project_topics(selected_project, df)
     if not proj_topics:
         proj_topics = topics[:4]  # Default placeholders if empty
     topic_adjustments = get_planned_topic_adjustments(selected_project, pm_data)
 
     st.subheader(f"Dashboard » {selected_project}")
+    active_project_milestones = [
+        (mil_id, mil_info)
+        for mil_id, mil_info in pm_data.items()
+        if clean_label(mil_info.get("project_context", "")) == selected_project
+        and not bool(mil_info.get("completed", False))
+    ]
+
+    if active_project_milestones:
+        st.markdown("#### Active Planned Milestones")
+        for mil_id, mil_info in active_project_milestones:
+            render_dashboard_milestone_summary(mil_id, mil_info)
+            st.markdown("---")
 
     def render_topic_files(t_proj, t_topic, btn_key=""):
         with st.popover("📂 Topic Files", use_container_width=True):
@@ -1276,7 +1391,7 @@ elif page == "Weekly Performance":
     selected_project = sel_col1.selectbox("🌐 Select View Context (Project Filter)", projects, index=project_index)
     
     # Get topics available in this project
-    proj_topics_list = order_topics(df[df["Project"] == selected_project]['Topic'].dropna().unique())
+    proj_topics_list = get_project_topics(selected_project, df)
     selected_topic = sel_col2.selectbox("🏷️ Select Topic Filter", ["All Topics"] + proj_topics_list)
     
     st.divider()
@@ -2530,6 +2645,3 @@ elif page == "Document Drive":
                         st.rerun()
         else:
             st.info("No files uploaded for this topic yet.")
-
-
-
