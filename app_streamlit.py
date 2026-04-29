@@ -255,6 +255,7 @@ def restore_data_from_drive_if_needed():
         "tasks.xlsx",
         "planned_milestones.json",
         "project_notes.json",
+        "competitors.json",
         "daily_activity.log",
         "drive_metadata.json",
     ]
@@ -335,6 +336,12 @@ def save_competitor_data(data):
     os.makedirs("data", exist_ok=True)
     with open("data/competitors.json", "w") as f:
         json.dump(data, f, indent=4)
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _backup_file_to_drive("data/competitors.json", ["data"])
+        _backup_file_to_drive("data/competitors.json", ["data_backups"], rename_file=f"competitors_backup_{timestamp}.json")
+    except Exception:
+        pass
 
 GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
