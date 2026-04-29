@@ -110,6 +110,7 @@ st.html(
 
 BACKEND_SYNC_STATE_PATH = "data/backend_sync_state.json"
 SYNC_CLOCK_SKEW_SECONDS = 2
+SYSTEM_DATA_FOLDER_NAME = "System Data"
 PLANNED_MILESTONE_SNAPSHOT_PATH = "data/planned_milestones.json"
 PLANNED_MILESTONE_RECORD_PREFIX = "planned_milestone_record_"
 PLANNED_MILESTONE_AUDIT_LOG_PATH = "data/planned_milestone_audit.jsonl"
@@ -131,6 +132,21 @@ def _utc_now_iso():
 
 def _normalize_sync_path(local_path):
     return os.path.normpath(local_path)
+
+
+def _is_non_blocking_drive_sync_path(local_path):
+    file_name = os.path.basename(str(local_path or "").strip())
+    return file_name in {
+        "daily_activity.log",
+        os.path.basename(SHARED_DATA_AUDIT_LOG_PATH),
+        os.path.basename(PLANNED_MILESTONE_AUDIT_LOG_PATH),
+        os.path.basename(BACKEND_SYNC_STATE_PATH),
+    }
+
+
+def _is_drive_storage_quota_error(exc):
+    message = str(exc or "")
+    return "storageQuotaExceeded" in message or "Service Accounts do not have storage quota" in message
 
 
 def load_backend_sync_state():
@@ -331,24 +347,10 @@ def _get_drive_system_data_file(file_name):
     service = get_google_drive_service()
     if service is None:
         return None
-    parent_id = ensure_drive_path(["System Data"])
-    if not parent_id:
+    matching_files = list_system_data_files(service, file_name_filter=_system_data_file_name_filter(file_name))
+    if not matching_files:
         return None
-    escaped_file_name = escape_drive_query_value(file_name)
-    query = (
-        f"name = '{escaped_file_name}' and "
-        f"'{parent_id}' in parents and trashed = false"
-    )
-    results = service.files().list(
-        q=query,
-        spaces="drive",
-        fields="files(id, name, modifiedTime)",
-        pageSize=1,
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True
-    ).execute()
-    files = results.get("files", [])
-    return files[0] if files else None
+    return max(matching_files, key=lambda file_info: str(file_info.get("modifiedTime", "")))
 
 
 def _shared_file_conflict_message(local_path, remote_modified_time=""):
@@ -1028,6 +1030,63 @@ def ensure_drive_folder(service, folder_name, parent_id):
     ).execute()
     return folder["id"]
 
+
+def list_drive_folders(service, folder_name, parent_id):
+    escaped_folder_name = escape_drive_query_value(folder_name)
+    query = (
+        f"name = '{escaped_folder_name}' and "
+        f"'{parent_id}' in parents and "
+        "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    )
+    result = service.files().list(
+        q=query,
+        spaces="drive",
+        fields="files(id, name, modifiedTime)",
+        pageSize=50,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
+    ).execute()
+    return result.get("files", [])
+
+
+def get_system_data_folder_ids(service):
+    root_folder_id = get_google_drive_root_folder_id()
+    if service is None or not root_folder_id:
+        return []
+
+    folders = list_drive_folders(service, SYSTEM_DATA_FOLDER_NAME, root_folder_id)
+    if folders:
+        return [folder["id"] for folder in folders if str(folder.get("id", "")).strip() != ""]
+
+    created_id = ensure_drive_folder(service, SYSTEM_DATA_FOLDER_NAME, root_folder_id)
+    return [created_id] if created_id else []
+
+
+def list_system_data_files(service, file_name_filter=None):
+    latest_files = {}
+    for folder_id in get_system_data_folder_ids(service):
+        page_token = None
+        while True:
+            results = service.files().list(
+                q=f"'{folder_id}' in parents and trashed = false",
+                fields="nextPageToken, files(id, name, modifiedTime)",
+                pageSize=1000,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
+            ).execute()
+            for file_info in results.get("files", []):
+                file_name = str(file_info.get("name", "")).strip()
+                if file_name_filter is not None and not file_name_filter(file_name):
+                    continue
+                current = latest_files.get(file_name)
+                if current is None or str(file_info.get("modifiedTime", "")) > str(current.get("modifiedTime", "")):
+                    latest_files[file_name] = file_info
+            page_token = results.get("nextPageToken")
+            if page_token is None:
+                break
+    return list(latest_files.values())
+
 def ensure_drive_path(path_parts):
     service = get_google_drive_service()
     root_folder_id = get_google_drive_root_folder_id()
@@ -1144,7 +1203,8 @@ def sync_data_file_to_drive(local_path):
             pending_upload=True,
             last_upload_error=str(e),
         )
-        st.sidebar.error(f"Failed to sync {local_path} to Drive: {e}")
+        if not (_is_non_blocking_drive_sync_path(local_path) and _is_drive_storage_quota_error(e)):
+            st.sidebar.error(f"Failed to sync {local_path} to Drive: {e}")
         return False
 
 
@@ -1160,8 +1220,8 @@ def pull_backend_data_from_drive(file_name_filter=None, log_result=True):
         return False
     
     service = get_google_drive_service()
-    parent_id = ensure_drive_path(["System Data"])
-    if not parent_id:
+    folder_ids = get_system_data_folder_ids(service)
+    if not folder_ids:
         if log_result:
             st.sidebar.error("Could not find or create 'System Data' folder on Drive.")
             st.session_state.last_backend_sync_ok = False
@@ -1169,19 +1229,7 @@ def pull_backend_data_from_drive(file_name_filter=None, log_result=True):
         return False
         
     try:
-        files = []
-        page_token = None
-        while True:
-            results = service.files().list(
-                q=f"'{parent_id}' in parents and trashed = false",
-                fields="nextPageToken, files(id, name, modifiedTime)",
-                pageSize=1000,
-                pageToken=page_token
-            ).execute()
-            files.extend(results.get("files", []))
-            page_token = results.get("nextPageToken", None)
-            if page_token is None:
-                break
+        files = list_system_data_files(service, file_name_filter=file_name_filter)
         
         import io
         import shutil
@@ -1197,8 +1245,6 @@ def pull_backend_data_from_drive(file_name_filter=None, log_result=True):
         for f in files:
             file_id = f['id']
             file_name = f['name']
-            if file_name_filter is not None and not file_name_filter(file_name):
-                continue
             local_path = os.path.join("data", file_name)
             
             # Critical Conflict Prevention for Streamlit Cloud:
