@@ -1,4 +1,145 @@
 {
+    "Concept-1": {
+        "description": "In this concept, we have six milestones to complete",
+        "time_needed": 0.0,
+        "from_date": "2026-04-28",
+        "to_date": "2026-05-30",
+        "project_context": "Truck Unloading Project",
+        "progress_increase": {
+            "Robot": 0.0,
+            "Vision System": 0.0,
+            "AGV": 0.0,
+            "EOAT": 0.0,
+            "Vacuum System": 0.0,
+            "Conveyor and Scissor lift": 0.0,
+            "Dataset": 0.0,
+            "Container": 0.0,
+            "Objects": 0.0
+        },
+        "completed": false,
+        "tasks": {}
+    },
+    "M3": {
+        "description": "Single row picking",
+        "time_needed": 0.0,
+        "from_date": "2026-04-27",
+        "to_date": "2026-04-30",
+        "project_context": "Truck Unloading Project",
+        "progress_increase": {
+            "Robot": 0.0,
+            "Vision System": 0.0,
+            "AGV": 0.0,
+            "EOAT": 0.0,
+            "Vacuum System": 0.0,
+            "Conveyor and Scissor lift": 0.0,
+            "Container": 0.0,
+            "Objects": 0.0
+        },
+        "completed": false,
+        "tasks": {
+            "Task 1": {
+                "description": "Fine tuning of Logics, (already available logics)",
+                "time_needed": 0.0,
+                "from_date": "2026-04-27",
+                "to_date": "2026-04-28",
+                "project": "Truck Unloading Project",
+                "topic": "",
+                "completed": false,
+                "errors": []
+            },
+            "Task 2": {
+                "description": "Mixed home checking and picking, (Fine tuning) ",
+                "time_needed": 0.0,
+                "from_date": "2026-04-27",
+                "to_date": "2026-04-28",
+                "project": "Truck Unloading Project",
+                "topic": "",
+                "completed": false,
+                "errors": []
+            },
+            "Task 3": {
+                "description": "Picking all boxes",
+                "time_needed": 0.0,
+                "from_date": "2026-04-28",
+                "to_date": "2026-04-29",
+                "project": "Truck Unloading Project",
+                "topic": "",
+                "completed": false,
+                "errors": []
+            },
+            "Task 4": {
+                "description": "9th row picking by rotating 90%",
+                "time_needed": 0.0,
+                "from_date": "2026-04-29",
+                "to_date": "2026-04-30",
+                "project": "Truck Unloading Project",
+                "topic": "",
+                "completed": false,
+                "errors": []
+            },
+            "Task 5": {
+                "description": "DCS zone studying ",
+                "time_needed": 0.0,
+                "from_date": "2026-04-29",
+                "to_date": "2026-04-30",
+                "project": "Truck Unloading Project",
+                "topic": "",
+                "completed": false,
+                "errors": []
+            }
+        }
+    },
+    "M4": {
+        "description": "Dataset creation",
+        "time_needed": 0.0,
+        "from_date": "2026-04-24",
+        "to_date": "2026-05-10",
+        "project_context": "Truck Unloading Project",
+        "progress_increase": {
+            "Robot": 0.0,
+            "Vision System": 0.0,
+            "AGV": 0.0,
+            "EOAT": 0.0,
+            "Vacuum System": 0.0,
+            "Conveyor and Scissor lift": 0.0,
+            "Dataset": 0.0,
+            "Container": 0.0,
+            "Objects": 0.0
+        },
+        "completed": false,
+        "tasks": {
+            "Task 1": {
+                "description": "Planning for dataset creation ",
+                "time_needed": 0.0,
+                "from_date": "2026-04-24",
+                "to_date": "2026-04-25",
+                "project": "Truck Unloading Project",
+                "topic": "",
+                "completed": false,
+                "errors": []
+            },
+            "Task 2": {
+                "description": "Checklist creation and separated two method of dataset collection (Robot vs Manual)",
+                "time_needed": 0.0,
+                "from_date": "2026-04-24",
+                "to_date": "2026-04-25",
+                "project": "Truck Unloading Project",
+                "topic": "",
+                "completed": false,
+                "errors": []
+            },
+            "Task 3": {
+                "description": "Manual dataset creation for listed 25th April checklist",
+                "time_needed": 0.0,
+                "from_date": "2026-04-25",
+                "to_date": "2026-04-25",
+                "project": "Truck Unloading Project",
+                "topic": "",
+                "completed": false,
+                "errors": []
+            }
+        }
+    },
     "M2": {
         "description": "\nSingle Robot - Auto Trail inside Container - After Calibration",
         "time_needed": 0.0,
@@ -12,7 +153,6 @@
             "EOAT": 0.0,
             "Vacuum System": 0.0,
             "Conveyor and Scissor lift": 0.0,
-            "Dashboard": 0.0,
             "Container": 0.0,
             "Objects": 0.0
         },
