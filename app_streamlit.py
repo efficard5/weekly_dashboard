@@ -148,6 +148,13 @@ def save_data(data_df):
     os.makedirs("data", exist_ok=True)
     data_df.to_excel("data/tasks.xlsx", index=False)
     st.cache_data.clear()  # Ensure the next load reflects the newly saved data
+    # Backup to Drive silently
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _backup_file_to_drive("data/tasks.xlsx", ["data"])
+        _backup_file_to_drive("data/tasks.xlsx", ["data_backups"], rename_file=f"tasks_backup_{timestamp}.xlsx")
+    except Exception:
+        pass
 
 def load_notes():
     if os.path.exists("data/project_notes.json"):
@@ -170,6 +177,116 @@ def save_planned_milestones(milestones):
     os.makedirs("data", exist_ok=True)
     with open("data/planned_milestones.json", "w") as f:
         json.dump(milestones, f, indent=4)
+    # Backup to Drive silently
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _backup_file_to_drive("data/planned_milestones.json", ["data"])
+        _backup_file_to_drive("data/planned_milestones.json", ["data_backups"], rename_file=f"milestones_backup_{timestamp}.json")
+    except Exception:
+        pass
+
+# ──────────────────────────────────────────────────────────
+# DRIVE BACKUP / RESTORE HELPERS
+# These functions keep key data files in sync with Drive
+# so data survives server restarts.
+# ──────────────────────────────────────────────────────────
+
+def _backup_file_to_drive(local_path, drive_folder_parts, rename_file=None):
+    """Upload a local file to Drive (silently – never crashes the app)."""
+    if not google_drive_is_ready():
+        return
+    if not os.path.exists(local_path):
+        return
+    try:
+        with open(local_path, "rb") as fh:
+            file_bytes = fh.read()
+        file_name = rename_file if rename_file else os.path.basename(local_path)
+        upload_bytes_to_drive(drive_folder_parts, file_name, file_bytes)
+    except Exception:
+        pass
+
+
+def _get_drive_file_id(service, parent_id, file_name):
+    """Return the Drive file-id of file_name inside parent_id, or None."""
+    try:
+        escaped = escape_drive_query_value(file_name)
+        result = service.files().list(
+            q=f"name='{escaped}' and '{parent_id}' in parents and trashed=false",
+            spaces="drive",
+            fields="files(id, modifiedTime)",
+            pageSize=1,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        files = result.get("files", [])
+        return files[0] if files else None
+    except Exception:
+        return None
+
+
+def restore_data_from_drive_if_needed():
+    """Pull data files from Drive if local copy is missing or older.
+    Runs once per Streamlit session at startup.
+    """
+    if not google_drive_is_ready():
+        return
+    service = get_google_drive_service()
+    root_id = get_google_drive_root_folder_id()
+    if not service or not root_id:
+        return
+
+    try:
+        # Find the 'data' subfolder in our root Drive folder
+        data_folder_info = _get_drive_file_id(service, root_id, "data")
+        if not data_folder_info:
+            return
+        data_folder_id = data_folder_info["id"]
+    except Exception:
+        return
+
+    files_to_restore = [
+        "tasks.xlsx",
+        "planned_milestones.json",
+        "project_notes.json",
+        "daily_activity.log",
+        "drive_metadata.json",
+    ]
+
+    for file_name in files_to_restore:
+        local_path = os.path.join("data", file_name)
+        try:
+            drive_file = _get_drive_file_id(service, data_folder_id, file_name)
+            if not drive_file:
+                continue
+
+            drive_mtime_str = drive_file.get("modifiedTime", "")
+            drive_mtime = None
+            if drive_mtime_str:
+                from datetime import timezone
+                drive_mtime = datetime.strptime(drive_mtime_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+
+            # Skip if local file is newer
+            if os.path.exists(local_path) and drive_mtime:
+                local_mtime = datetime.fromtimestamp(os.path.getmtime(local_path),
+                                                     tz=drive_mtime.tzinfo)
+                if local_mtime >= drive_mtime:
+                    continue  # Local is at least as new – keep it
+
+            # Download from Drive
+            from googleapiclient.http import MediaIoBaseDownload
+            import io as _io
+            request = service.files().get_media(fileId=drive_file["id"])
+            buf = _io.BytesIO()
+            dl = MediaIoBaseDownload(buf, request)
+            done = False
+            while not done:
+                _, done = dl.next_chunk()
+            os.makedirs("data", exist_ok=True)
+            with open(local_path, "wb") as fh:
+                fh.write(buf.getvalue())
+        except Exception:
+            continue  # Never crash startup
+
 
 def load_drive_metadata():
     if os.path.exists("data/drive_metadata.json"):
@@ -227,41 +344,41 @@ def _load_google_drive_credentials():
 
     creds = None
 
-    if os.path.exists('token.json') and Credentials is not None:
+    # Try token.json first (user OAuth – preferred, has Drive quota)
+    for token_path in ['token.json', 'token.json.bak']:
+        if os.path.exists(token_path) and Credentials is not None:
+            try:
+                creds = Credentials.from_authorized_user_file(token_path, GOOGLE_DRIVE_SCOPES)
+                if creds and creds.expired and creds.refresh_token:
+                    try:
+                        creds.refresh(Request())
+                        with open('token.json', 'w') as token:
+                            token.write(creds.to_json())
+                    except Exception:
+                        creds = None
+                if creds and creds.valid:
+                    return creds
+            except Exception:
+                creds = None
+
+    # If OAuth token unavailable/invalid, try interactive flow
+    if os.path.exists('credentials.json'):
         try:
-            creds = Credentials.from_authorized_user_file('token.json', GOOGLE_DRIVE_SCOPES)
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
+            creds = flow.run_local_server(port=0)
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
+            if creds and creds.valid:
+                return creds
         except Exception:
             pass
 
-    if creds and creds.expired and creds.refresh_token:
-        try:
-            creds.refresh(Request())
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
-        except Exception:
-            creds = None
-
-    if not creds or not creds.valid:
-        if os.path.exists('credentials.json'):
-            try:
-                from google_auth_oauthlib.flow import InstalledAppFlow
-                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
-                creds = flow.run_local_server(port=0)
-                with open('token.json', 'w') as token:
-                    token.write(creds.to_json())
-            except Exception as e:
-                try:
-                    st.sidebar.error(f"OAuth Flow error: {e}")
-                except:
-                    pass
-
-    if creds and creds.valid:
-        return creds
-
+    # Last resort: service account (NOTE: service accounts have ZERO Drive quota
+    # and cannot create files in regular My Drive folders – only Shared Drives).
     if service_account is None:
         return None
 
-    # 1. Check file path (optional)
     service_account_path = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
     if service_account_path and os.path.exists(service_account_path):
         return service_account.Credentials.from_service_account_file(
@@ -269,7 +386,6 @@ def _load_google_drive_credentials():
             scopes=GOOGLE_DRIVE_SCOPES
         )
 
-    # 2. Check JSON string (optional)
     service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     if service_account_json:
         try:
@@ -280,21 +396,15 @@ def _load_google_drive_credentials():
         except Exception:
             pass
 
-    # 3. Read from Streamlit secrets
     try:
         secret_account = st.secrets.get("service_account") or st.secrets.get("gdrive_service_account")
-
         if secret_account:
             return service_account.Credentials.from_service_account_info(
                 dict(secret_account),
                 scopes=GOOGLE_DRIVE_SCOPES
             )
-    except Exception as e:
-        try:
-            st.sidebar.error(f"Secrets error: {e}")
-        except:
-            pass
-        return None
+    except Exception:
+        pass
 
     return None
 
@@ -418,21 +528,30 @@ def upload_bytes_to_drive(path_parts, file_name, file_bytes, mime_type=None):
     import io
     media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=False)
     metadata = {"name": file_name, "parents": [parent_id]}
-    if existing:
-        file_obj = service.files().update(
-            fileId=existing[0]["id"],
-            media_body=media,
-            fields="id, webViewLink",
-            supportsAllDrives=True
-        ).execute()
-    else:
-        file_obj = service.files().create(
-            body=metadata,
-            media_body=media,
-            fields="id, webViewLink",
-            supportsAllDrives=True
-        ).execute()
-    return file_obj
+    try:
+        if existing:
+            file_obj = service.files().update(
+                fileId=existing[0]["id"],
+                media_body=media,
+                fields="id, webViewLink",
+                supportsAllDrives=True
+            ).execute()
+        else:
+            file_obj = service.files().create(
+                body=metadata,
+                media_body=media,
+                fields="id, webViewLink",
+                supportsAllDrives=True
+            ).execute()
+        return file_obj
+    except Exception as exc:
+        err_str = str(exc)
+        if "storageQuotaExceeded" in err_str:
+            raise RuntimeError(
+                "Drive quota error: The Google account used for uploads has no storage space. "
+                "Please re-authenticate with your personal Google account (delete token.json and restart)."
+            ) from exc
+        raise
 
 
 def save_uploaded_file(file_obj, local_path, drive_path_parts=None):
@@ -675,6 +794,43 @@ def build_topic_progress_df(task_df):
     topic_progress_df["Topic"] = pd.Categorical(topic_progress_df["Topic"], categories=ordered_topic_names, ordered=True)
     return topic_progress_df.sort_values("Topic").reset_index(drop=True)
 
+def get_concept_family_projects(project_name, data_df=None, registry=None):
+    project_name = clean_label(project_name)
+    if project_name == "" or "concept" not in project_name.lower():
+        return [project_name] if project_name else []
+
+    combined_projects = []
+    registry = PROJECT_TOPIC_REGISTRY if registry is None else registry
+    if isinstance(registry, dict):
+        combined_projects.extend(registry.keys())
+    if data_df is not None and not data_df.empty and "Project" in data_df.columns:
+        combined_projects.extend(clean_label(project) for project in data_df["Project"].dropna().unique())
+
+    normalized_target = project_name.lower().replace(" ", "").replace("-", "").replace("_", "")
+    if "concept" not in normalized_target:
+        return [project_name]
+
+    concept_index = normalized_target.find("concept")
+    family_prefix = normalized_target[:concept_index]
+    if family_prefix == "":
+        family_prefix = normalized_target
+
+    family_projects = []
+    for candidate in combined_projects:
+        candidate = clean_label(candidate)
+        if candidate == "":
+            continue
+        normalized_candidate = candidate.lower().replace(" ", "").replace("-", "").replace("_", "")
+        if "concept" not in normalized_candidate:
+            continue
+        candidate_index = normalized_candidate.find("concept")
+        candidate_prefix = normalized_candidate[:candidate_index] if candidate_index != -1 else normalized_candidate
+        if candidate_prefix == family_prefix:
+            family_projects.append(candidate)
+
+    concept_projects = list(dict.fromkeys(family_projects))
+    return concept_projects or [project_name]
+
 def get_project_topics(project_name, data_df=None, registry=None):
     project_name = clean_label(project_name)
     if project_name == "":
@@ -682,16 +838,67 @@ def get_project_topics(project_name, data_df=None, registry=None):
 
     combined_topics = []
     registry = PROJECT_TOPIC_REGISTRY if registry is None else registry
-    if isinstance(registry, dict):
-        combined_topics.extend(registry.get(project_name, []))
+    candidate_projects = get_concept_family_projects(project_name, data_df, registry)
+    for candidate_project in candidate_projects:
+        if isinstance(registry, dict):
+            combined_topics.extend(registry.get(candidate_project, []))
 
-    if data_df is not None and not data_df.empty:
-        combined_topics.extend(
-            clean_label(topic)
-            for topic in data_df[data_df["Project"] == project_name]["Topic"].dropna().unique()
-        )
+        if data_df is not None and not data_df.empty:
+            combined_topics.extend(
+                clean_label(topic)
+                for topic in data_df[data_df["Project"] == candidate_project]["Topic"].dropna().unique()
+            )
 
     return order_topics(combined_topics)
+
+def infer_milestone_project(milestone_name, mil_info, data_df=None, registry=None):
+    milestone_name = clean_label(milestone_name)
+    explicit_project = clean_label(mil_info.get("project_context", "")) if isinstance(mil_info, dict) else ""
+    available_projects = []
+    registry = PROJECT_TOPIC_REGISTRY if registry is None else registry
+    if isinstance(registry, dict):
+        available_projects.extend(registry.keys())
+    if data_df is not None and not data_df.empty and "Project" in data_df.columns:
+        available_projects.extend(clean_label(project) for project in data_df["Project"].dropna().unique())
+    available_projects = [project for project in dict.fromkeys(available_projects) if project != ""]
+
+    normalized_name = milestone_name.lower().replace(" ", "").replace("-", "").replace("_", "")
+    concept_candidates = []
+    if "concept1" in normalized_name:
+        concept_candidates = [project for project in available_projects if "concept-1" in project.lower() or "single robot" in project.lower()]
+    elif "concept2" in normalized_name:
+        concept_candidates = [project for project in available_projects if "concept-2" in project.lower() or "dual robot" in project.lower()]
+
+    if concept_candidates:
+        return concept_candidates[0]
+    return explicit_project
+
+def get_milestone_fallback_tasks(milestone_name, mil_info, data_df):
+    if data_df is None or data_df.empty:
+        return pd.DataFrame()
+    milestone_project = infer_milestone_project(milestone_name, mil_info, data_df)
+    if milestone_project == "":
+        return pd.DataFrame()
+    fallback_df = data_df[data_df["Project"] == milestone_project].copy()
+    if fallback_df.empty:
+        return fallback_df
+    fallback_df["Start Date"] = pd.to_datetime(fallback_df["Start Date"], errors="coerce")
+    fallback_df["End Date"] = pd.to_datetime(fallback_df["End Date"], errors="coerce")
+    milestone_start = pd.to_datetime(mil_info.get("from_date", ""), errors="coerce")
+    milestone_end = pd.to_datetime(mil_info.get("to_date", ""), errors="coerce")
+    if pd.notna(milestone_start) and pd.notna(milestone_end):
+        fallback_df = fallback_df[
+            (fallback_df["End Date"].isna() | (fallback_df["End Date"] >= milestone_start)) &
+            (fallback_df["Start Date"].isna() | (fallback_df["Start Date"] <= milestone_end))
+        ]
+    return fallback_df
+
+def get_project_scope_df(project_name, data_df):
+    if data_df is None or data_df.empty:
+        return pd.DataFrame(columns=getattr(data_df, "columns", []))
+    candidate_projects = get_concept_family_projects(project_name, data_df, PROJECT_TOPIC_REGISTRY)
+    scoped_df = data_df[data_df["Project"].isin(candidate_projects)].copy()
+    return scoped_df
 
 def get_milestone_topic(mil_info):
     explicit_topic = str(mil_info.get("topic", "")).strip()
@@ -970,6 +1177,17 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
                 st.rerun()
 
 
+# ── Startup: pull any newer files from Drive before loading local data ──
+# Runs once per session using a session-state flag so it doesn't repeat
+# on every Streamlit widget interaction / rerun.
+if not st.session_state.get("_drive_restore_done", False):
+    try:
+        restore_data_from_drive_if_needed()
+        st.cache_data.clear()   # Force fresh read after possible Drive restore
+    except Exception:
+        pass
+    st.session_state["_drive_restore_done"] = True
+
 tasks_file_mtime = os.path.getmtime("data/tasks.xlsx") if os.path.exists("data/tasks.xlsx") else None
 df = load_data(tasks_file_mtime)
 notes_db = load_notes()
@@ -1053,7 +1271,7 @@ if page == "Dashboard":
     st.divider()
 
     # Filter dataframe exclusively to this project
-    proj_df = df[df["Project"] == selected_project]
+    proj_df = get_project_scope_df(selected_project, df)
     
     # Topics specific to this project
     proj_topics = get_project_topics(selected_project, df)
@@ -1062,18 +1280,6 @@ if page == "Dashboard":
     topic_adjustments = get_planned_topic_adjustments(selected_project, pm_data)
 
     st.subheader(f"Dashboard » {selected_project}")
-    active_project_milestones = [
-        (mil_id, mil_info)
-        for mil_id, mil_info in pm_data.items()
-        if clean_label(mil_info.get("project_context", "")) == selected_project
-        and not bool(mil_info.get("completed", False))
-    ]
-
-    if active_project_milestones:
-        st.markdown("#### Active Planned Milestones")
-        for mil_id, mil_info in active_project_milestones:
-            render_dashboard_milestone_summary(mil_id, mil_info)
-            st.markdown("---")
 
     def render_topic_files(t_proj, t_topic, btn_key=""):
         with st.popover("📂 Topic Files", use_container_width=True):
@@ -1396,7 +1602,7 @@ elif page == "Weekly Performance":
     
     st.divider()
     
-    proj_df = df[df["Project"] == selected_project]
+    proj_df = get_project_scope_df(selected_project, df)
     if selected_topic != "All Topics":
         proj_df = proj_df[proj_df["Topic"] == selected_topic]
     
@@ -1892,7 +2098,7 @@ elif page == "Planned Milestones":
             end = mil_info.get("to_date", "")
             if not start or not end: continue
             
-            project = mil_info.get("project_context", "Unassigned")
+            project = infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY) or mil_info.get("project_context", "Unassigned")
             completed = "Completed" if mil_info.get("completed", False) else "Planned"
             
             gantt_data.append(dict(
@@ -2037,7 +2243,7 @@ elif page == "Planned Milestones":
                 e_m_desc = em_c1.text_area("Description", value=mil_info["description"], key=f"emd_{mil_id}")
                 e_m_name = em_c2.text_input("Name", value=mil_id, key=f"emn_{mil_id}")
                 e_m_time = em_c3.number_input("Time Needed (Hours)", min_value=0.0, step=0.5, value=float(mil_info.get("time_needed", 0)), key=f"emt_{mil_id}")
-                current_m_project = str(mil_info.get("project_context", "")).strip()
+                current_m_project = infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY)
                 project_context_options = projects.copy()
                 if current_m_project and current_m_project not in project_context_options:
                     project_context_options.append(current_m_project)
@@ -2101,8 +2307,9 @@ elif page == "Planned Milestones":
                 md_c1.markdown(format_bullet_markdown(mil_info.get("description", "")))
                 topic_inc_display = get_milestone_topic_increases(mil_info)
                 inc_lines = "  \n".join([f"**+{v:.0f}%** {t}" for t, v in topic_inc_display.items() if v > 0]) or "No increase set"
+                display_project = infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY) or mil_info.get("project_context", "Not linked")
                 md_c2.markdown(
-                    f"**Project:** {mil_info.get('project_context', 'Not linked')}  \n"
+                    f"**Project:** {display_project}  \n"
                     f"**Time:** {mil_info.get('time_needed', 0)} Hrs  \n"
                     f"**Dates:** {mil_info.get('from_date', '')} to {mil_info.get('to_date', '')}  \n"
                     f"**Topic Increases:**  \n{inc_lines}"
@@ -2119,7 +2326,17 @@ elif page == "Planned Milestones":
             m_tasks = mil_info.get("tasks", {})
             with st.expander(f"#### Tasks {mil_id}", expanded=False):
                 if not m_tasks:
-                    st.info("No tasks added yet for this milestone.")
+                    fallback_tasks = get_milestone_fallback_tasks(mil_id, mil_info, df)
+                    if fallback_tasks.empty:
+                        st.info("No tasks added yet for this milestone.")
+                    else:
+                        st.info("No milestone task records found. Showing linked task rows from the related project.")
+                        display_cols = [col for col in ["Topic", "Task Name", "Start Date", "End Date", "Week", "Status"] if col in fallback_tasks.columns]
+                        fallback_view = fallback_tasks[display_cols].copy()
+                        for date_col in ["Start Date", "End Date"]:
+                            if date_col in fallback_view.columns:
+                                fallback_view[date_col] = pd.to_datetime(fallback_view[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
+                        st.dataframe(fallback_view, use_container_width=True, hide_index=True)
                 for t_id, t_info in list(m_tasks.items()):
                     with st.container():
                         row_col1, row_col2, row_col3 = st.columns([4.2, 1.5, 1.8])
@@ -2195,7 +2412,7 @@ elif page == "Planned Milestones":
                                 st.session_state[edit_t_key] = False
                                 st.rerun()
 
-                        impact_project = str(mil_info.get("project_context", t_info.get("project", ""))).strip()
+                        impact_project = clean_label(t_info.get("project", "")) or infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY)
                         current_topic = str(t_info.get("topic", "")).strip()
                         topic_label = current_topic if current_topic else "Not linked"
                         project_label = impact_project if impact_project else "Not linked"
@@ -2222,7 +2439,7 @@ elif page == "Planned Milestones":
             
             # --- Add Task inside Milestone ---
             with st.expander(f"➕ Add Task to {mil_id}", expanded=False):
-                milestone_project = str(mil_info.get("project_context", "")).strip()
+                milestone_project = infer_milestone_project(mil_id, mil_info, df, PROJECT_TOPIC_REGISTRY)
                 t_c1, t_c2, t_c3, t_c5 = st.columns([2, 3, 1, 3])
                 new_t_name = t_c1.text_input("Task Name", key=f"ntname_{mil_id}")
                 new_t_desc = t_c2.text_area("Task Description", key=f"ntd_{mil_id}")
