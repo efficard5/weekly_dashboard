@@ -24,7 +24,7 @@ except ImportError:
     MediaIoBaseUpload = None
 
 
-BASE_PROJECTS = ["Truck Unloading Project"]
+BASE_PROJECTS = ["Truck Unloading Project", "Concept 1", "Concept 2"]
 BASE_TOPICS = ["Robot", "Vision System", "Conveyor", "AGV", "EOAT", "Vacuum System", "Container", "Objects"]
 PROJECT_TOPIC_REGISTRY = {}
 
