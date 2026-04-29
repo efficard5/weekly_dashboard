@@ -817,40 +817,7 @@ def build_topic_progress_df(task_df):
 
 def get_concept_family_projects(project_name, data_df=None, registry=None):
     project_name = clean_label(project_name)
-    if project_name == "" or "concept" not in project_name.lower():
-        return [project_name] if project_name else []
-
-    combined_projects = []
-    registry = PROJECT_TOPIC_REGISTRY if registry is None else registry
-    if isinstance(registry, dict):
-        combined_projects.extend(registry.keys())
-    if data_df is not None and not data_df.empty and "Project" in data_df.columns:
-        combined_projects.extend(clean_label(project) for project in data_df["Project"].dropna().unique())
-
-    normalized_target = project_name.lower().replace(" ", "").replace("-", "").replace("_", "")
-    if "concept" not in normalized_target:
-        return [project_name]
-
-    concept_index = normalized_target.find("concept")
-    family_prefix = normalized_target[:concept_index]
-    if family_prefix == "":
-        family_prefix = normalized_target
-
-    family_projects = []
-    for candidate in combined_projects:
-        candidate = clean_label(candidate)
-        if candidate == "":
-            continue
-        normalized_candidate = candidate.lower().replace(" ", "").replace("-", "").replace("_", "")
-        if "concept" not in normalized_candidate:
-            continue
-        candidate_index = normalized_candidate.find("concept")
-        candidate_prefix = normalized_candidate[:candidate_index] if candidate_index != -1 else normalized_candidate
-        if candidate_prefix == family_prefix:
-            family_projects.append(candidate)
-
-    concept_projects = list(dict.fromkeys(family_projects))
-    return concept_projects or [project_name]
+    return [project_name] if project_name else []
 
 def get_project_topics(project_name, data_df=None, registry=None):
     project_name = clean_label(project_name)
@@ -957,25 +924,45 @@ def get_milestone_topic_increases(mil_info):
 
 def get_planned_topic_adjustments(project_name, milestones):
     adjustments = {}
-    if str(project_name).strip() == "":
+    if not project_name:
         return adjustments
 
+    clean_target = str(project_name).strip()
+    
     for mil_info in milestones.values():
         milestone_project = str(mil_info.get("project_context", "")).strip()
-        if milestone_project != project_name:
+        
+        # Check for matching project. We allow partial matching if one contains the other
+        # to handle cases where milestones are generic but projects are specific.
+        if milestone_project != clean_target:
+            # If not exact match, check if they are conceptually the same
+            if milestone_project not in clean_target and clean_target not in milestone_project:
+                continue
+                
+        if not mil_info.get("completed", False):
             continue
-        if not bool(mil_info.get("completed", False)):
-            continue
+            
         topic_increases = get_milestone_topic_increases(mil_info)
-        project_topics = get_project_topics(milestone_project, df)
+        # We need a dataframe to get topics, use the globally available 'df'
+        # but safely check its existence.
+        current_topics = BASE_TOPICS
+        try:
+             # Try to get topics from the specific project if possible
+             from __main__ import df as global_df
+             proj_topics = get_project_topics(milestone_project, global_df)
+             if proj_topics:
+                 current_topics = proj_topics
+        except:
+             pass
+
         for topic, increase in topic_increases.items():
             if increase <= 0:
                 continue
             if topic == "All Topics":
-                for pt in project_topics:
-                    adjustments[pt] = adjustments.get(pt, 0.0) + increase
+                for pt in current_topics:
+                    adjustments[pt] = adjustments.get(pt, 0.0) + float(increase)
             else:
-                adjustments[topic] = adjustments.get(topic, 0.0) + increase
+                adjustments[topic] = adjustments.get(topic, 0.0) + float(increase)
 
     return adjustments
 
