@@ -4,7 +4,7 @@
         "time_needed": 0.0,
         "from_date": "2026-04-28",
         "to_date": "2026-05-30",
-        "project_context": "Concept 1",
+        "project_context": "Truck Unloading Project",
         "progress_increase": {
             "Robot": 0.0,
             "Vision System": 0.0,
