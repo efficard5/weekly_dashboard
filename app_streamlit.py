@@ -166,6 +166,13 @@ def save_notes(notes):
     os.makedirs("data", exist_ok=True)
     with open("data/project_notes.json", "w") as f:
         json.dump(notes, f, indent=4)
+    # Backup to Drive silently
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _backup_file_to_drive("data/project_notes.json", ["data"])
+        _backup_file_to_drive("data/project_notes.json", ["data_backups"], rename_file=f"project_notes_backup_{timestamp}.json")
+    except Exception:
+        pass
 
 def load_planned_milestones():
     if os.path.exists("data/planned_milestones.json"):
@@ -298,6 +305,13 @@ def save_drive_metadata(data):
     os.makedirs("data", exist_ok=True)
     with open("data/drive_metadata.json", "w") as f:
         json.dump(data, f, indent=4)
+    # Backup to Drive silently
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _backup_file_to_drive("data/drive_metadata.json", ["data"])
+        _backup_file_to_drive("data/drive_metadata.json", ["data_backups"], rename_file=f"drive_metadata_backup_{timestamp}.json")
+    except Exception:
+        pass
 
 def load_competitor_data():
     if os.path.exists("data/competitors.json"):
