@@ -1,0 +1,9 @@
+{
+    "BASE_PROJECTS": ["Truck Unloading Project"],
+    "BASE_TOPICS": ["Robot", "Vision System", "Conveyor", "AGV", "EOAT", "Vacuum System", "Container", "Objects"],
+    "BASE_EMPLOYEES": ["Unassigned", "Employee 1", "Employee 2", "Employee 3", "Employee 4"],
+    "STATUS_OPTIONS": ["Planned", "In Progress", "Completed", "Delayed"],
+    "DRIVE_DEFAULT_PATH": ["DefaultProject", "General"],
+    "NAV_OPTIONS": ["Dashboard", "Weekly Performance", "Tasks & Milestones", "Planned Milestones", "Image Gallery", "Competitors & Research"],
+    "ADMIN_PASSWORD": "effica123"
+}

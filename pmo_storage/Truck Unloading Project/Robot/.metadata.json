@@ -1,0 +1,35 @@
+{
+    "files": {
+        "Screenshot from 2026-04-17 08-38-33.png": {
+            "note": "",
+            "drive_url": "https://drive.google.com/file/d/1d8EOeOihtubll4mwiglZrh6DzUmaT-jK/view?usp=drivesdk",
+            "drive_file_id": "1d8EOeOihtubll4mwiglZrh6DzUmaT-jK"
+        }
+    },
+    "links": {
+        "2946b109-1ba8-4e6b-b8bf-a80fa25235db": {
+            "url": "https://drive.google.com/drive/u/2/folders/1s9N9M9dnE7VgJrmQEkPVc3u681ccSMqU?ths=true",
+            "note": "CYCLE_TIME"
+        },
+        "7e36e3c6-9536-4a8b-8481-17aac05dc143": {
+            "url": "https://drive.google.com/drive/u/2/folders/1XCq_O0R59swLcTT9pdI8Zt8tVf4cahUj?ths=true",
+            "note": "DCS"
+        },
+        "216223b2-fbce-4e6f-b5d9-b584c4b359de": {
+            "url": "https://drive.google.com/drive/u/2/folders/1AmPAnRICSxeQMuim8wRvg1E-zXgG1Dfc?ths=true",
+            "note": "Flow chart"
+        },
+        "93d21d39-cd56-4709-9594-8695a34e9781": {
+            "url": "https://drive.google.com/drive/u/2/folders/1edcyICnuS2usXxnv9yybQRVw6aCE4pz4?ths=true",
+            "note": "Main board"
+        },
+        "f401d33f-9470-4d1b-8ab6-20c293bcce75": {
+            "url": "https://drive.google.com/drive/u/2/folders/13c6pf716GnuceF3eTPp0Dp4GRhiokNO1?ths=true",
+            "note": "Other testing"
+        },
+        "fcca69a5-5c05-4607-836f-276bec17e2ed": {
+            "url": "https://drive.google.com/drive/u/2/folders/1uuWW02cNUTnFGpFoTR8oZwnYlpkrhYMh?ths=true",
+            "note": "Documents of Robot"
+        }
+    }
+}

@@ -24,11 +24,11 @@ Thumbs.db
 *.bak
 *.fix_backup
 
-# Data storage - NOW COMPLETELY EXCLUDED (Managed via Google Drive)
-pmo_storage/
-data/
+# Data storage - Restored for Cloud
+# pmo_storage/
+# data/
 
-# Secrets
+# Secrets - BLOCKED FOR SECURITY (Use Streamlit Secrets for Cloud)
 credentials.json
 token.json
 token.json*

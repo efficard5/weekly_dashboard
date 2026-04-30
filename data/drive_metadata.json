@@ -1,0 +1,208 @@
+{
+    "Truck Unloading Project": {
+        "Robot": {
+            "file_notes": {},
+            "urls": [
+                {
+                    "url": "https://drive.google.com/drive/u/2/folders/1-fv-c0BUWgGUitl8Zt0LtaR4rlnArZ9G",
+                    "note": "Vision files drive link"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1De56jFCijsyVImu9ADwYE5-UfDLb2Tlz/edit?slide=id.p1#slide=id.p1",
+                    "note": "_Robot Positions & Camera Output (2)"
+                },
+                {
+                    "url": "https://docs.google.com/document/d/12AcXNK6R0wXOeFnv8BR7CfLVpn9aPOlP/edit",
+                    "note": "All combined robot "
+                },
+                {
+                    "url": "https://docs.google.com/document/d/1z87CJzkscUuvz4OGs-E4JoaWPAshE5RyJPN1zIO7HtM/edit?tab=t.0",
+                    "note": "robot_unmounting"
+                }
+            ]
+        },
+        "Vision System": {
+            "file_notes": {},
+            "urls": [
+                {
+                    "url": "https://docs.google.com/spreadsheets/d/1hmtTIaaoyqhvXx34_-oZE5Lr8aCFbYZjqJdNdz6UNHg/edit?usp=sharing",
+                    "note": "Cam Fov Comparison"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1d5zjpZOExP8CvC_XpfyFPs6GqhTAAD4DpBaegLX7qzk/edit?usp=sharing",
+                    "note": "Possible Offset wrt camera snap"
+                },
+                {
+                    "url": "https://docs.google.com/document/d/1XTscdgcpZPb7HtiQZsVcIGRFzkKh4ar6YKu2GTXvQlk/edit?usp=sharing",
+                    "note": "Intel camera comparison"
+                }
+            ]
+        },
+        "AGV": {
+            "file_notes": {},
+            "urls": [
+                {
+                    "url": "https://docs.google.com/presentation/d/1cEbln94tO2bnEzrSOIOVubRU1cfe1h5LgBVk6V5UPi4/edit?usp=sharing",
+                    "note": "Robot Mounting check on AGV"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1fgla4IYW0XiqtqYKprQELBKh46jiuhBn/edit?usp=sharing&ouid=112604994074059347847&rtpof=true&sd=true",
+                    "note": "AGV movent with robot mounted"
+                },
+                {
+                    "url": "https://docs.google.com/document/d/1z5ro2vUwkaZOcAncaDtbu3THhfp_UKpW8cXEnT_JNKY/edit?usp=sharing",
+                    "note": "AGV entering considerations"
+                },
+                {
+                    "url": "https://drive.google.com/file/d/1hGNbcY3dGrmBEcCImTbTl3wh_8CAM33B/view?usp=sharing",
+                    "note": "AGV cycle time"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1RkoTCbmfR7deweOvcmFXmdgOks9TzOZzmRuMvUXR9NI/edit?usp=sharing",
+                    "note": "AGV lighting poss.."
+                }
+            ]
+        },
+        "Vacuum System": {
+            "file_notes": {},
+            "urls": [
+                {
+                    "url": "https://docs.google.com/spreadsheets/d/1RN3IAjn4ZCpwUpWMzjxV5t3kFSFGQt_hky8402VKvZg/edit?usp=sharing",
+                    "note": "vacume blover testing"
+                },
+                {
+                    "url": "https://docs.google.com/spreadsheets/d/1JGH-Guo3H4KN6IYIC-4s4ctAx7ZiPxbpLvRLyU4I4OE/edit?usp=sharing",
+                    "note": "Blower sound test"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1V3SmafmBP2MezwqMDlB2HXQIGSJQyJpn6uMgSiBscsw/edit?slide=id.g32fcd1d02cd_0_27#slide=id.g32fcd1d02cd_0_27",
+                    "note": "vacuum cup listing"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1rf2T_adT7Q5t5kODOm0cqlaaQMf8Me8vfRcbp2hsb1c/edit?slide=id.g34cc442252d_0_17#slide=id.g34cc442252d_0_17",
+                    "note": "vacuum Discussion"
+                },
+                {
+                    "url": "https://drive.google.com/drive/folders/1uHBiu1JnDwZ5tfk9vL2FBj5muK6-j8fb?usp=sharing",
+                    "note": "Hanwha cups checking"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1Ofq4k6i9BPZ1zAEEAtZqGf-wthqTRN4SSeA8Oi6SfQU/edit?usp=sharing",
+                    "note": "Vaccum cup lifting test with 2 blue gernerator, with 12 cups & 8 cups"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1V3SmafmBP2MezwqMDlB2HXQIGSJQyJpn6uMgSiBscsw/edit?usp=sharing",
+                    "note": "Vaccum cup lifting test with 2 blue gernerator, with 12 cups & 8 cups file 2"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/16JAqYfCeh9POcAzaZ_2Zn7qejlml_Cv3kiML3GG_4Bk/edit?usp=sharing",
+                    "note": "Vaccum cup lifting test with 2 blue gernerator, with 12 cups & 8 cups file 3"
+                },
+                {
+                    "url": "https://docs.google.com/document/d/12deGyRAoDBA3pdvELjJCmqFAVGYHIUIm3kUPdMih9Vo/edit?usp=sharing",
+                    "note": "Vccum cup selection and analysis"
+                },
+                {
+                    "url": "https://docs.google.com/spreadsheets/d/1iqg0CYPJk99KHemj3oTcZ33MF1boZJWR01eTuFwo8eg/edit?usp=sharing",
+                    "note": "Hanwha cup spec"
+                },
+                {
+                    "url": "https://docs.google.com/spreadsheets/d/1oUSXGm7Cne4ro4Co82MS6PSyrqLypzcIAsB_rWchOxc/edit?usp=sharing",
+                    "note": "Vaccum Generator load test"
+                },
+                {
+                    "url": "https://docs.google.com/spreadsheets/d/1keRFxscgF_FccZSxyb9GiIOjnDUW6zCyAEh1c61ZNVs/edit?usp=sharing",
+                    "note": "Schmalz vs hanwha"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1rf2T_adT7Q5t5kODOm0cqlaaQMf8Me8vfRcbp2hsb1c/edit?usp=sharing",
+                    "note": "Hanwha cup poc"
+                }
+            ]
+        },
+        "EOAT": {
+            "file_notes": {},
+            "urls": [
+                {
+                    "url": "https://docs.google.com/presentation/d/1weyOSmkKp40DRB90B0yFY1jj9F4H8zur/edit?usp=sharing&ouid=112604994074059347847&rtpof=true&sd=true",
+                    "note": "Eoat Sensor Mounting"
+                },
+                {
+                    "url": "https://drive.google.com/file/d/1n7UYPugI3X0bBFytHOoG34eKofweH3Uy/view?usp=sharing",
+                    "note": "Eoat combi.. logic"
+                },
+                {
+                    "url": "https://docs.google.com/spreadsheets/d/1ljBy7dNrIvS642gVvsi8guJ5LuCsy4OluND2d1xdU7s/edit?gid=0#gid=0",
+                    "note": "EOAT models"
+                }
+            ]
+        },
+        "Conveyor": {
+            "file_notes": {},
+            "urls": [
+                {
+                    "url": "https://docs.google.com/presentation/d/1DTpnL5rx6D6HIxs4lJuHP8Yo17kP7KGE/edit?usp=sharing&ouid=112604994074059347847&rtpof=true&sd=true",
+                    "note": "Conveyor cycle logic"
+                },
+                {
+                    "url": "https://drive.google.com/drive/folders/1vJwUjL7nHskgvvZmwWW2xmmcb-YeUYBG?usp=sharing",
+                    "note": "US conveyor checking"
+                },
+                {
+                    "url": "https://drive.google.com/drive/folders/13STkJtQh2bHZcak1ZYXH5CUyfZKvvxtI?usp=sharing",
+                    "note": "Conveyor with box testing"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1HAmZgQmmunOeWcHQPGKNVhHwyU-0TI3R0gY-ycu0tF0/edit?usp=sharing",
+                    "note": "CONVEYOR BELT SIZING"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1PpfDPA2L96Jdht72zYKYAF_gx3KojjOBAjIc4SVm4cw/edit?usp=sharing",
+                    "note": "conveyor docking station"
+                }
+            ]
+        },
+        "Conveyor and Scissor lift": {
+            "file_notes": {},
+            "urls": [
+                {
+                    "url": "https://docs.google.com/presentation/d/1PpfDPA2L96Jdht72zYKYAF_gx3KojjOBAjIc4SVm4cw/edit?usp=sharing",
+                    "note": "conveyor docking station"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1HAmZgQmmunOeWcHQPGKNVhHwyU-0TI3R0gY-ycu0tF0/edit?usp=sharing",
+                    "note": "CONVEYOR BELT SIZING"
+                },
+                {
+                    "url": "https://drive.google.com/drive/folders/13STkJtQh2bHZcak1ZYXH5CUyfZKvvxtI?usp=sharing",
+                    "note": "Conveyor with box testing"
+                },
+                {
+                    "url": "https://drive.google.com/drive/folders/1vJwUjL7nHskgvvZmwWW2xmmcb-YeUYBG?usp=sharing",
+                    "note": "US conveyor checking"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1DTpnL5rx6D6HIxs4lJuHP8Yo17kP7KGE/edit?usp=sharing&ouid=112604994074059347847&rtpof=true&sd=true",
+                    "note": "Conveyor cycle logic"
+                },
+                {
+                    "url": "https://drive.google.com/file/d/1w1PTmdcSJGRCiYrEYY14DrW7KcHWdnD9/view?usp=sharing",
+                    "note": "Scissor lift enquiry"
+                }
+            ]
+        },
+        "Container": {
+            "file_notes": {},
+            "urls": [
+                {
+                    "url": "https://docs.google.com/presentation/d/1lJMwJpCLvQ8rqn3RkHMV1FfGtmmjLXoBjbFUZbAS5gs/edit?usp=drive_link",
+                    "note": "Prob of ro.picking inside container"
+                },
+                {
+                    "url": "https://docs.google.com/presentation/d/1mOSzKOvJmkXxuwXr9DCyKnf3WKvABabYOJn7VmoUrlQ/edit?usp=sharing",
+                    "note": "Robot picking inside containber"
+                }
+            ]
+        }
+    }
+}
