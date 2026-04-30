@@ -106,7 +106,7 @@ components.html(
 
 # --- EXCEL DATA LAYER ---
 @st.cache_data
-def load_data(_file_mtime=None):
+def load_data(file_mtime=None):
     file_path = "data/tasks.xlsx"
     legacy_project_names = {
         "Default Project": "Truck Unloading Project",
@@ -118,6 +118,8 @@ def load_data(_file_mtime=None):
         "Milestone_Text", "Milestone_Role", "Milestone_Author_Name"
     ]
 
+    # `file_mtime` is intentionally part of the cache key so callers can pass
+    # `os.path.getmtime(file_path)` and invalidate Streamlit's cache on changes.
     if os.path.exists(file_path):
         df = pd.read_excel(file_path)
         needs_save = False
@@ -366,6 +368,8 @@ def _load_google_drive_credentials():
         try:
             from google_auth_oauthlib.flow import InstalledAppFlow
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
+            # Local-only OAuth helper: deployed Streamlit servers cannot open a browser
+            # on behalf of the user, so `run_local_server` will hang or fail in cloud apps.
             creds = flow.run_local_server(port=0)
             with open('token.json', 'w') as token:
                 token.write(creds.to_json())
@@ -565,11 +569,17 @@ def save_uploaded_file(file_obj, local_path, drive_path_parts=None):
     with open(local_path, "wb") as f_out:
         f_out.write(file_bytes)
 
-    # Mirror local directory structure for Google Drive upload
-    local_dir = os.path.dirname(local_path)
-    if local_dir:
-        drive_path_parts = [part for part in os.path.normpath(local_dir).split(os.sep) if part]
-    elif not drive_path_parts:
+    # Respect explicit Drive destinations from the caller; otherwise derive a
+    # fallback path from the local directory structure.
+    if drive_path_parts:
+        drive_path_parts = list(drive_path_parts)
+    else:
+        local_dir = os.path.dirname(local_path)
+        if local_dir:
+            drive_path_parts = [part for part in os.path.normpath(local_dir).split(os.sep) if part]
+        else:
+            drive_path_parts = ["DefaultProject", "General"]
+    if not drive_path_parts:
         drive_path_parts = ["DefaultProject", "General"]
 
     drive_result = None
@@ -1291,7 +1301,7 @@ if page == "Dashboard":
                 try:
                     with open(meta_path, "r") as mf:
                         topic_meta = json.load(mf)
-                except:
+                except Exception:
                     topic_meta = {}
 
             # 1. Upload Section at the TOP
@@ -1406,7 +1416,7 @@ if page == "Dashboard":
                                     if os.path.exists(file_path):
                                         try:
                                             os.remove(file_path)
-                                        except:
+                                        except Exception:
                                             pass
                                     if "files" in topic_meta and file_item in topic_meta["files"]:
                                         del topic_meta["files"][file_item]
@@ -2379,7 +2389,7 @@ elif page == "Planned Milestones":
                                 t_end_val = pd.to_datetime(t_info.get("to_date", cur_m_end)).date()
                                 t_start_val = max(cur_m_start, min(cur_m_end, t_start_val))
                                 t_end_val = max(cur_m_start, min(cur_m_end, t_end_val))
-                            except:
+                            except Exception:
                                 t_start_val = cur_m_start
                                 t_end_val = cur_m_end
 
@@ -2755,7 +2765,7 @@ elif page == "Document Drive":
         try:
             with open(meta_path, "r") as mf:
                 topic_dir_meta = json.load(mf)
-        except:
+        except Exception:
             pass
 
     st.markdown(f"### 📂 Assets for **{t_proj}** » **{t_topic}**")
@@ -2850,7 +2860,7 @@ elif page == "Document Drive":
                         if os.path.exists(file_path):
                             try:
                                 os.remove(file_path)
-                            except:
+                            except Exception:
                                 pass
                         if file_item in topic_meta.get("file_notes", {}):
                             del topic_meta["file_notes"][file_item]
