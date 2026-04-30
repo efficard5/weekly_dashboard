@@ -24,8 +24,26 @@ except ImportError:
     MediaIoBaseUpload = None
 
 
-BASE_PROJECTS = ["Truck Unloading Project"]
-BASE_TOPICS = ["Robot", "Vision System", "Conveyor", "AGV", "EOAT", "Vacuum System", "Container", "Objects"]
+def load_app_config():
+    config_path = "data/app_config.json"
+    default_config = {
+        "BASE_PROJECTS": ["Truck Unloading Project"],
+        "BASE_TOPICS": ["Robot", "Vision System", "Conveyor", "AGV", "EOAT", "Vacuum System", "Container", "Objects"],
+        "BASE_EMPLOYEES": ["Unassigned", "Employee 1", "Employee 2", "Employee 3", "Employee 4"],
+        "STATUS_OPTIONS": ["Planned", "In Progress", "Completed", "Delayed"],
+        "DRIVE_DEFAULT_PATH": ["DefaultProject", "General"]
+    }
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                return {**default_config, **json.load(f)}
+        except Exception:
+            return default_config
+    return default_config
+
+APP_CONFIG = load_app_config()
+BASE_PROJECTS = APP_CONFIG["BASE_PROJECTS"]
+BASE_TOPICS = APP_CONFIG["BASE_TOPICS"]
 PROJECT_TOPIC_REGISTRY = {}
 
 
@@ -258,6 +276,7 @@ def restore_data_from_drive_if_needed():
         "competitors.json",
         "daily_activity.log",
         "drive_metadata.json",
+        "app_config.json",
     ]
 
     for file_name in files_to_restore:
@@ -318,19 +337,7 @@ def load_competitor_data():
     if os.path.exists("data/competitors.json"):
         with open("data/competitors.json", "r") as f:
             return json.load(f)
-    return {
-        "Unloading Rate": [
-            {"Competitor": "Boston Dynamics", "Value": "800 cph"},
-            {"Competitor": "Pickle", "Value": "600+ cph"},
-            {"Competitor": "XYZ", "Value": "500+ cph"},
-            {"Competitor": "Dexiterity", "Value": "1000 cph"},
-            {"Competitor": "Mujin", "Value": "1000+ cph"},
-            {"Competitor": "Technica", "Value": "240 full rows/hour"},
-            {"Competitor": "Anyware robotics", "Value": "1000 cph"},
-            {"Competitor": "Kawasaki", "Value": "600 cph"},
-            {"Competitor": "Yaskawa Motoman", "Value": "600+ cph"}
-        ]
-    }
+    return {"Unloading Rate": []}
 
 def save_competitor_data(data):
     os.makedirs("data", exist_ok=True)
@@ -591,7 +598,7 @@ def save_uploaded_file(file_obj, local_path, drive_path_parts=None):
     if local_dir:
         drive_path_parts = [part for part in os.path.normpath(local_dir).split(os.sep) if part]
     elif not drive_path_parts:
-        drive_path_parts = ["DefaultProject", "General"]
+        drive_path_parts = APP_CONFIG.get("DRIVE_DEFAULT_PATH", ["DefaultProject", "General"])
 
     drive_result = None
     drive_error = None
@@ -1204,11 +1211,11 @@ projects, topics, PROJECT_TOPIC_REGISTRY = build_project_topic_registry(df, plan
 
 # --- DYNAMIC PROJECTS & TOPICS ---
 # Isolate Employees
-base_emps = ["Unassigned", "Employee 1", "Employee 2", "Employee 3", "Employee 4"]
+base_emps = APP_CONFIG["BASE_EMPLOYEES"]
 saved_emps = [str(e) for e in df.get('Employee', pd.Series([])).dropna().unique() if str(e).strip() != ""]
 employees = list(dict.fromkeys(base_emps + saved_emps))
 
-STATUS_OPTIONS = ["Planned", "In Progress", "Completed", "Delayed"]
+STATUS_OPTIONS = APP_CONFIG["STATUS_OPTIONS"]
 
 # --- INITIALIZE IMAGES IN SESSION ---
 if 'topic_images' not in st.session_state:
@@ -1247,7 +1254,7 @@ if st.session_state.role is None:
         st.subheader("🛡️ Administrator Override")
         admin_pass = st.text_input("Enter Master Node Key", type="password", key="adm_p")
         if st.button("Enter PMO (Admin)", use_container_width=True):
-            if admin_pass == "effica123":
+            if admin_pass == APP_CONFIG.get("ADMIN_PASSWORD", "effica123"):
                 st.session_state.role = "Admin"
                 st.session_state.auth_name = "Administrator"
                 st.rerun()
@@ -1262,10 +1269,17 @@ if st.sidebar.button("🚪 Logout Data Session"):
     st.session_state.role = None
     st.rerun()
 st.sidebar.divider()
-nav_options = ["Dashboard", "Weekly Performance", "Tasks & Milestones", "Planned Milestones", "Image Gallery", "Competitors & Research"]
+nav_options = APP_CONFIG.get("NAV_OPTIONS", ["Dashboard", "Weekly Performance", "Tasks & Milestones", "Planned Milestones", "Image Gallery", "Competitors & Research"])
 if st.session_state.role == "Admin":
     nav_options.append("Document Drive")
-page = st.sidebar.selectbox("Navigation", nav_options)
+
+# Handle jumps from Dashboard links
+default_ix = 0
+if "jump_to_page" in st.session_state and st.session_state.jump_to_page in nav_options:
+    default_ix = nav_options.index(st.session_state.jump_to_page)
+    del st.session_state.jump_to_page
+
+page = st.sidebar.selectbox("Navigation", nav_options, index=default_ix)
 
 # ─────────────────────────────────────────────
 # DASHBOARD PAGE
@@ -1283,8 +1297,21 @@ if page == "Dashboard":
     
     # Topics specific to this project
     proj_topics = get_project_topics(selected_project, df)
+    # Filter to only show topics that actually exist in the data for this project
+    actual_data_topics = set(proj_df["Topic"].dropna().unique())
+    actual_milestone_topics = set()
+    for mil in pm_data.values():
+        if str(mil.get("project_context", "")).strip() == selected_project:
+            actual_milestone_topics.update(get_milestone_topic_increases(mil).keys())
+    
+    # Remove 'All Topics' from the set
+    actual_milestone_topics.discard("All Topics")
+    
+    # Final project topics: only those with tasks or milestones
+    proj_topics = [t for t in proj_topics if t in actual_data_topics or t in actual_milestone_topics]
+
     if not proj_topics:
-        proj_topics = topics[:4]  # Default placeholders if empty
+        st.info(f"No active topics found for '{selected_project}'.")
     topic_adjustments = get_planned_topic_adjustments(selected_project, pm_data)
 
     st.subheader(f"Dashboard » {selected_project}")
@@ -1510,7 +1537,7 @@ if page == "Dashboard":
     st.divider()
 
     # 3. BOTTOM DETAIL GRID
-    st.divider()
+    # st.divider()
     
     col_hdr, col_tgl = st.columns([4, 1])
     col_hdr.subheader("Project Context & Analytics")

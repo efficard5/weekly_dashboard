@@ -24,12 +24,9 @@ Thumbs.db
 *.bak
 *.fix_backup
 
-# Data storage (if any large files)
-pmo_storage/**
-!pmo_storage/**/
-!pmo_storage/**/.metadata.json
-data/backups/
-data/backend_sync_state.json
+# Data storage - NOW COMPLETELY EXCLUDED (Managed via Google Drive)
+pmo_storage/
+data/
 
 # Secrets
 credentials.json
