@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 import os
 import json
 import mimetypes
+import io
+from uuid import uuid4
+import threading
 import streamlit.components.v1 as components
 
 
@@ -24,27 +27,113 @@ except ImportError:
     MediaIoBaseUpload = None
 
 
+DATA_DRIVE_FOLDER = ["data"]
+PROJECT_TOPIC_REGISTRY = {}
+
+
 def load_app_config():
-    config_path = "data/app_config.json"
     default_config = {
         "BASE_PROJECTS": ["Truck Unloading Project"],
         "BASE_TOPICS": ["Robot", "Vision System", "Conveyor", "AGV", "EOAT", "Vacuum System", "Container", "Objects"],
         "BASE_EMPLOYEES": ["Unassigned", "Employee 1", "Employee 2", "Employee 3", "Employee 4"],
+        "EMPLOYEE_CREDENTIALS": [
+            {"name": "Employee 1", "password": "emp123"},
+            {"name": "Employee 2", "password": "emp123"}
+        ],
         "STATUS_OPTIONS": ["Planned", "In Progress", "Completed", "Delayed"],
         "DRIVE_DEFAULT_PATH": ["DefaultProject", "General"]
     }
-    if os.path.exists(config_path):
+    config_bytes = _read_data_file_bytes_from_drive("app_config.json")
+    if config_bytes is not None:
         try:
-            with open(config_path, "r") as f:
-                return {**default_config, **json.load(f)}
+            return {**default_config, **json.loads(config_bytes.decode("utf-8"))}
         except Exception:
             return default_config
     return default_config
 
-APP_CONFIG = load_app_config()
-BASE_PROJECTS = APP_CONFIG["BASE_PROJECTS"]
-BASE_TOPICS = APP_CONFIG["BASE_TOPICS"]
-PROJECT_TOPIC_REGISTRY = {}
+def save_app_config(config):
+    os.makedirs("data", exist_ok=True)
+    with open("data/app_config.json", "w") as f:
+        json.dump(config, f, indent=4)
+    _read_data_file_bytes_from_drive.clear()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _async_drive_backup("data/app_config.json", ["data"])
+    _async_drive_backup("data/app_config.json", ["data_backups"], rename_file=f"app_config_backup_{timestamp}.json")
+
+def _async_drive_backup(local_path, drive_folder_parts, rename_file=None):
+    """Run backup in a background thread to avoid UI latency."""
+    if not os.path.exists(local_path):
+        return
+    thread = threading.Thread(
+        target=_backup_file_to_drive, 
+        args=(local_path, drive_folder_parts, rename_file),
+        daemon=True
+    )
+    thread.start()
+
+def _normalize_employee_credentials(raw_credentials):
+    cleaned_credentials = []
+    for row in raw_credentials:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", "")).strip()
+        password = str(row.get("password", "")).strip()
+        if name and password:
+            cleaned_credentials.append({"name": name, "password": password})
+    return cleaned_credentials
+
+def load_employee_accounts():
+    legacy_credentials = _normalize_employee_credentials(APP_CONFIG.get("EMPLOYEE_CREDENTIALS", []))
+    account_bytes = _read_data_file_bytes_from_drive("employee_accounts.json")
+    if account_bytes is not None:
+        try:
+            return _normalize_employee_credentials(json.loads(account_bytes.decode("utf-8")))
+        except Exception:
+            return legacy_credentials
+
+    if legacy_credentials:
+        save_employee_accounts(legacy_credentials)
+    return legacy_credentials
+
+def save_employee_accounts(accounts):
+    os.makedirs("data", exist_ok=True)
+    cleaned_accounts = _normalize_employee_credentials(accounts)
+    with open("data/employee_accounts.json", "w") as f:
+        json.dump(cleaned_accounts, f, indent=4)
+    _read_data_file_bytes_from_drive.clear()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _async_drive_backup("data/employee_accounts.json", ["data"])
+    _async_drive_backup("data/employee_accounts.json", ["data_backups"], rename_file=f"employee_accounts_backup_{timestamp}.json")
+
+def get_employee_credentials():
+    return load_employee_accounts()
+
+def employee_exists(name):
+    clean_name = str(name or "").strip()
+    return any(employee["name"] == clean_name for employee in get_employee_credentials())
+
+def register_employee(name, password):
+    clean_name = str(name or "").strip()
+    clean_password = str(password or "").strip()
+    if not clean_name or not clean_password:
+        return False, "Name and password are required."
+    if employee_exists(clean_name):
+        return False, "Employee name already exists."
+
+    accounts = get_employee_credentials()
+    accounts.append({"name": clean_name, "password": clean_password})
+    save_employee_accounts(accounts)
+    return True, ""
+
+def authenticate_employee(name, password):
+    clean_name = str(name or "").strip()
+    clean_password = str(password or "").strip()
+    for employee in get_employee_credentials():
+        if employee["name"] == clean_name and employee["password"] == clean_password:
+            return True
+    return False
 
 
 
@@ -123,9 +212,7 @@ components.html(
 )
 
 # --- EXCEL DATA LAYER ---
-@st.cache_data
 def load_data(_file_mtime=None):
-    file_path = "data/tasks.xlsx"
     legacy_project_names = {
         "Default Project": "Truck Unloading Project",
         "R&D Project": "Truck Unloading Project",
@@ -135,9 +222,9 @@ def load_data(_file_mtime=None):
         "Completion %", "Status", "Employee", "Week", "Hidden",
         "Milestone_Text", "Milestone_Role", "Milestone_Author_Name"
     ]
-
-    if os.path.exists(file_path):
-        df = pd.read_excel(file_path)
+    task_bytes = _read_data_file_bytes_from_drive("tasks.xlsx")
+    if task_bytes is not None:
+        df = pd.read_excel(io.BytesIO(task_bytes))
         needs_save = False
         # Consolidate column defaults and type enforcement into a single loop
         defaults = {
@@ -157,58 +244,157 @@ def load_data(_file_mtime=None):
                 needs_save = True
         df["Hidden"] = df["Hidden"].fillna(False).astype(bool)
         if needs_save:
-            os.makedirs("data", exist_ok=True)
-            df.to_excel(file_path, index=False)
+            save_data(df)
         return df
     return pd.DataFrame(columns=required_cols)
 
 def save_data(data_df):
     os.makedirs("data", exist_ok=True)
     data_df.to_excel("data/tasks.xlsx", index=False)
-    st.cache_data.clear()  # Ensure the next load reflects the newly saved data
-    # Backup to Drive silently
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _backup_file_to_drive("data/tasks.xlsx", ["data"])
-        _backup_file_to_drive("data/tasks.xlsx", ["data_backups"], rename_file=f"tasks_backup_{timestamp}.xlsx")
-    except Exception:
-        pass
+    _read_data_file_bytes_from_drive.clear()  # Ensure the next load reflects the newly saved data
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _async_drive_backup("data/tasks.xlsx", ["data"])
+    _async_drive_backup("data/tasks.xlsx", ["data_backups"], rename_file=f"tasks_backup_{timestamp}.xlsx")
+
+DAILY_TASK_COLUMNS = [
+    "Task ID",
+    "Department",
+    "Assigned Date",
+    "Planned Completion %",
+    "Task Description",
+    "Task Status",
+    "Assignee Email",
+    "Responsible Person",
+    "Allocated Hrs",
+]
+
+def normalize_daily_task_df(daily_df):
+    daily_df = daily_df.copy()
+    needs_save = False
+    defaults = {
+        "Task ID": "",
+        "Department": "R&D",
+        "Assigned Date": pd.NaT,
+        "Planned Completion %": 0,
+        "Task Description": "",
+        "Task Status": "",
+        "Assignee Email": "",
+        "Responsible Person": "",
+        "Allocated Hrs": 0,
+    }
+    for col in DAILY_TASK_COLUMNS:
+        if col not in daily_df.columns:
+            daily_df[col] = defaults.get(col, "")
+            needs_save = True
+
+    if "Due Date" in daily_df.columns:
+        daily_df = daily_df.drop(columns=["Due Date"])
+        needs_save = True
+
+    daily_df["Task ID"] = daily_df["Task ID"].fillna("").astype(str).str.strip()
+    missing_task_id_mask = daily_df["Task ID"] == ""
+    if missing_task_id_mask.any():
+        daily_df.loc[missing_task_id_mask, "Task ID"] = [str(uuid4()) for _ in range(int(missing_task_id_mask.sum()))]
+        needs_save = True
+    daily_df["Assigned Date"] = pd.to_datetime(daily_df["Assigned Date"], errors="coerce")
+    daily_df["Department"] = daily_df["Department"].fillna("").astype(str)
+    daily_df["Task Description"] = daily_df["Task Description"].fillna("").astype(str)
+    daily_df["Task Status"] = daily_df["Task Status"].fillna("").astype(str)
+    daily_df["Assignee Email"] = daily_df["Assignee Email"].fillna("").astype(str)
+    daily_df["Responsible Person"] = daily_df["Responsible Person"].fillna("").astype(str)
+    daily_df["Planned Completion %"] = pd.to_numeric(daily_df["Planned Completion %"], errors="coerce").fillna(0)
+    daily_df["Allocated Hrs"] = pd.to_numeric(daily_df["Allocated Hrs"], errors="coerce").fillna(0)
+    ordered_cols = DAILY_TASK_COLUMNS + [col for col in daily_df.columns if col not in DAILY_TASK_COLUMNS]
+    return daily_df[ordered_cols], needs_save
+
+def load_daily_task_data(_file_mtime=None):
+    daywise_bytes = _read_data_file_bytes_from_drive("daily_task_daywise.xlsx")
+    if daywise_bytes is not None:
+        try:
+            sheet_map = pd.read_excel(io.BytesIO(daywise_bytes), sheet_name=None)
+            combined_df = pd.concat(sheet_map.values(), ignore_index=True) if sheet_map else pd.DataFrame(columns=DAILY_TASK_COLUMNS)
+        except Exception:
+            combined_df = pd.DataFrame(columns=DAILY_TASK_COLUMNS)
+        daily_df, needs_save = normalize_daily_task_df(combined_df)
+        if needs_save:
+            save_daily_task_data(daily_df)
+        return daily_df
+
+    legacy_bytes = _read_data_file_bytes_from_drive("daily_task.xlsx")
+    if legacy_bytes is not None:
+        legacy_df = pd.read_excel(io.BytesIO(legacy_bytes))
+        daily_df, _ = normalize_daily_task_df(legacy_df)
+        save_daily_task_data(daily_df)
+        return daily_df
+
+    return pd.DataFrame(columns=DAILY_TASK_COLUMNS)
+
+def save_daily_task_data(daily_df):
+    os.makedirs("data", exist_ok=True)
+    daily_df, _ = normalize_daily_task_df(daily_df)
+    save_daily_task_daywise_workbook(daily_df)
+    _read_data_file_bytes_from_drive.clear()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _async_drive_backup("data/daily_task_daywise.xlsx", ["data"])
+    _async_drive_backup("data/daily_task_daywise.xlsx", ["data_backups"], rename_file=f"daily_task_daywise_backup_{timestamp}.xlsx")
+
+def save_daily_task_daywise_workbook(daily_df):
+    export_path = "data/daily_task_daywise.xlsx"
+    export_df = daily_df.copy()
+    export_df["Assigned Date"] = pd.to_datetime(export_df["Assigned Date"], errors="coerce")
+
+    with pd.ExcelWriter(export_path) as writer:
+        dated_rows = export_df[export_df["Assigned Date"].notna()].copy()
+        if not dated_rows.empty:
+            for assigned_date, date_df in dated_rows.groupby(dated_rows["Assigned Date"].dt.strftime("%Y-%m-%d")):
+                date_df.to_excel(writer, sheet_name=str(assigned_date)[:31], index=False)
+
+        undated_rows = export_df[export_df["Assigned Date"].isna()].copy()
+        if not undated_rows.empty:
+            undated_rows.to_excel(writer, sheet_name="No Date", index=False)
+
+        if export_df.empty:
+            pd.DataFrame(columns=export_df.columns).to_excel(writer, sheet_name="No Data", index=False)
 
 def load_notes():
-    if os.path.exists("data/project_notes.json"):
-        with open("data/project_notes.json", "r") as f:
-            return json.load(f)
+    notes_bytes = _read_data_file_bytes_from_drive("project_notes.json")
+    if notes_bytes is not None:
+        try:
+            return json.loads(notes_bytes.decode("utf-8"))
+        except Exception:
+            return {}
     return {}
 
 def save_notes(notes):
     os.makedirs("data", exist_ok=True)
     with open("data/project_notes.json", "w") as f:
         json.dump(notes, f, indent=4)
-    # Backup to Drive silently
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _backup_file_to_drive("data/project_notes.json", ["data"])
-        _backup_file_to_drive("data/project_notes.json", ["data_backups"], rename_file=f"project_notes_backup_{timestamp}.json")
-    except Exception:
-        pass
+    _read_data_file_bytes_from_drive.clear()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _async_drive_backup("data/project_notes.json", ["data"])
+    _async_drive_backup("data/project_notes.json", ["data_backups"], rename_file=f"project_notes_backup_{timestamp}.json")
 
 def load_planned_milestones():
-    if os.path.exists("data/planned_milestones.json"):
-        with open("data/planned_milestones.json", "r") as f:
-            return json.load(f)
+    milestone_bytes = _read_data_file_bytes_from_drive("planned_milestones.json")
+    if milestone_bytes is not None:
+        try:
+            return json.loads(milestone_bytes.decode("utf-8"))
+        except Exception:
+            return {}
     return {}
 
 def save_planned_milestones(milestones):
     os.makedirs("data", exist_ok=True)
     with open("data/planned_milestones.json", "w") as f:
         json.dump(milestones, f, indent=4)
-    # Backup to Drive silently
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _backup_file_to_drive("data/planned_milestones.json", ["data"])
-        _backup_file_to_drive("data/planned_milestones.json", ["data_backups"], rename_file=f"milestones_backup_{timestamp}.json")
-    except Exception:
-        pass
+    _read_data_file_bytes_from_drive.clear()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _async_drive_backup("data/planned_milestones.json", ["data"])
+    _async_drive_backup("data/planned_milestones.json", ["data_backups"], rename_file=f"milestones_backup_{timestamp}.json")
 
 # ──────────────────────────────────────────────────────────
 # DRIVE BACKUP / RESTORE HELPERS
@@ -231,11 +417,42 @@ def _backup_file_to_drive(local_path, drive_folder_parts, rename_file=None):
         pass
 
 
-def _get_drive_file_id(service, parent_id, file_name):
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_drive_folder_id_by_path(_service, drive_folder_parts):
+    parent_id = get_google_drive_root_folder_id()
+    if not parent_id:
+        return None
+
+    for folder_name in drive_folder_parts:
+        clean_name = str(folder_name or "").strip()
+        if clean_name == "":
+            continue
+        escaped = escape_drive_query_value(clean_name)
+        result = _service.files().list(
+            q=(
+                f"name='{escaped}' and "
+                f"'{parent_id}' in parents and "
+                "mimeType='application/vnd.google-apps.folder' and trashed=false"
+            ),
+            spaces="drive",
+            fields="files(id)",
+            pageSize=1,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
+        folders = result.get("files", [])
+        if not folders:
+            return None
+        parent_id = folders[0]["id"]
+    return parent_id
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _get_drive_file_id(_service, parent_id, file_name):
     """Return the Drive file-id of file_name inside parent_id, or None."""
     try:
         escaped = escape_drive_query_value(file_name)
-        result = service.files().list(
+        result = _service.files().list(
             q=f"name='{escaped}' and '{parent_id}' in parents and trashed=false",
             spaces="drive",
             fields="files(id, modifiedTime)",
@@ -245,6 +462,68 @@ def _get_drive_file_id(service, parent_id, file_name):
         ).execute()
         files = result.get("files", [])
         return files[0] if files else None
+    except Exception:
+        return None
+
+
+def _mirror_drive_file_locally(local_path, file_bytes):
+    local_dir = os.path.dirname(local_path)
+    if local_dir:
+        os.makedirs(local_dir, exist_ok=True)
+    with open(local_path, "wb") as fh:
+        fh.write(file_bytes)
+
+
+def _seed_drive_file_from_local_if_missing(local_path, drive_folder_parts):
+    if not google_drive_is_ready() or not os.path.exists(local_path):
+        return
+
+    service = get_google_drive_service()
+    if service is None:
+        return
+
+    try:
+        folder_id = _get_drive_folder_id_by_path(service, drive_folder_parts)
+        file_name = os.path.basename(local_path)
+        if folder_id and _get_drive_file_id(service, folder_id, file_name):
+            return
+        _backup_file_to_drive(local_path, drive_folder_parts)
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=600, show_spinner="Syncing with Google Drive...")
+def _read_data_file_bytes_from_drive(file_name):
+    local_path = os.path.join("data", file_name)
+    _seed_drive_file_from_local_if_missing(local_path, DATA_DRIVE_FOLDER)
+
+    if not google_drive_is_ready():
+        return None
+
+    service = get_google_drive_service()
+    if service is None:
+        return None
+
+    try:
+        folder_id = _get_drive_folder_id_by_path(service, DATA_DRIVE_FOLDER)
+        if not folder_id:
+            return None
+        drive_file = _get_drive_file_id(service, folder_id, file_name)
+        if not drive_file:
+            return None
+
+        from googleapiclient.http import MediaIoBaseDownload
+
+        request = service.files().get_media(fileId=drive_file["id"])
+        buffer = io.BytesIO()
+        downloader = MediaIoBaseDownload(buffer, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+        file_bytes = buffer.getvalue()
+        _mirror_drive_file_locally(local_path, file_bytes)
+        return file_bytes
     except Exception:
         return None
 
@@ -271,6 +550,8 @@ def restore_data_from_drive_if_needed():
 
     files_to_restore = [
         "tasks.xlsx",
+        "employee_accounts.json",
+        "daily_task_daywise.xlsx",
         "planned_milestones.json",
         "project_notes.json",
         "competitors.json",
@@ -284,6 +565,13 @@ def restore_data_from_drive_if_needed():
         try:
             drive_file = _get_drive_file_id(service, data_folder_id, file_name)
             if not drive_file:
+                if file_name == "daily_task_daywise.xlsx":
+                    for stale_path in ["data/daily_task_daywise.xlsx", "data/daily_task.xlsx"]:
+                        if os.path.exists(stale_path):
+                            try:
+                                os.remove(stale_path)
+                            except Exception:
+                                pass
                 continue
 
             drive_mtime_str = drive_file.get("modifiedTime", "")
@@ -293,7 +581,7 @@ def restore_data_from_drive_if_needed():
                 drive_mtime = datetime.strptime(drive_mtime_str, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
 
             # Skip if local file is newer
-            if os.path.exists(local_path) and drive_mtime:
+            if file_name != "daily_task_daywise.xlsx" and os.path.exists(local_path) and drive_mtime:
                 local_mtime = datetime.fromtimestamp(os.path.getmtime(local_path),
                                                      tz=drive_mtime.tzinfo)
                 if local_mtime >= drive_mtime:
@@ -316,39 +604,42 @@ def restore_data_from_drive_if_needed():
 
 
 def load_drive_metadata():
-    if os.path.exists("data/drive_metadata.json"):
-        with open("data/drive_metadata.json", "r") as f:
-            return json.load(f)
+    metadata_bytes = _read_data_file_bytes_from_drive("drive_metadata.json")
+    if metadata_bytes is not None:
+        try:
+            return json.loads(metadata_bytes.decode("utf-8"))
+        except Exception:
+            return {}
     return {}
 
 def save_drive_metadata(data):
     os.makedirs("data", exist_ok=True)
     with open("data/drive_metadata.json", "w") as f:
         json.dump(data, f, indent=4)
-    # Backup to Drive silently
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _backup_file_to_drive("data/drive_metadata.json", ["data"])
-        _backup_file_to_drive("data/drive_metadata.json", ["data_backups"], rename_file=f"drive_metadata_backup_{timestamp}.json")
-    except Exception:
-        pass
+    _read_data_file_bytes_from_drive.clear()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _async_drive_backup("data/drive_metadata.json", ["data"])
+    _async_drive_backup("data/drive_metadata.json", ["data_backups"], rename_file=f"drive_metadata_backup_{timestamp}.json")
 
 def load_competitor_data():
-    if os.path.exists("data/competitors.json"):
-        with open("data/competitors.json", "r") as f:
-            return json.load(f)
+    competitor_bytes = _read_data_file_bytes_from_drive("competitors.json")
+    if competitor_bytes is not None:
+        try:
+            return json.loads(competitor_bytes.decode("utf-8"))
+        except Exception:
+            return {"Unloading Rate": []}
     return {"Unloading Rate": []}
 
 def save_competitor_data(data):
     os.makedirs("data", exist_ok=True)
     with open("data/competitors.json", "w") as f:
         json.dump(data, f, indent=4)
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _backup_file_to_drive("data/competitors.json", ["data"])
-        _backup_file_to_drive("data/competitors.json", ["data_backups"], rename_file=f"competitors_backup_{timestamp}.json")
-    except Exception:
-        pass
+    _read_data_file_bytes_from_drive.clear()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _async_drive_backup("data/competitors.json", ["data"])
+    _async_drive_backup("data/competitors.json", ["data_backups"], rename_file=f"competitors_backup_{timestamp}.json")
 
 GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -394,6 +685,8 @@ def _load_google_drive_credentials():
         try:
             from google_auth_oauthlib.flow import InstalledAppFlow
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', GOOGLE_DRIVE_SCOPES)
+            # Local-only OAuth helper: deployed Streamlit servers cannot open a browser
+            # on behalf of the user, so `run_local_server` will hang or fail in cloud apps.
             creds = flow.run_local_server(port=0)
             with open('token.json', 'w') as token:
                 token.write(creds.to_json())
@@ -593,11 +886,17 @@ def save_uploaded_file(file_obj, local_path, drive_path_parts=None):
     with open(local_path, "wb") as f_out:
         f_out.write(file_bytes)
 
-    # Mirror local directory structure for Google Drive upload
-    local_dir = os.path.dirname(local_path)
-    if local_dir:
-        drive_path_parts = [part for part in os.path.normpath(local_dir).split(os.sep) if part]
-    elif not drive_path_parts:
+    # Respect explicit Drive destinations from the caller; otherwise derive a
+    # fallback path from the local directory structure.
+    if drive_path_parts:
+        drive_path_parts = list(drive_path_parts)
+    else:
+        local_dir = os.path.dirname(local_path)
+        if local_dir:
+            drive_path_parts = [part for part in os.path.normpath(local_dir).split(os.sep) if part]
+        else:
+            drive_path_parts = APP_CONFIG.get("DRIVE_DEFAULT_PATH", ["DefaultProject", "General"])
+    if not drive_path_parts:
         drive_path_parts = APP_CONFIG.get("DRIVE_DEFAULT_PATH", ["DefaultProject", "General"])
 
     drive_result = None
@@ -959,7 +1258,7 @@ def get_planned_topic_adjustments(project_name, milestones):
              proj_topics = get_project_topics(milestone_project, global_df)
              if proj_topics:
                  current_topics = proj_topics
-        except:
+        except Exception:
              pass
 
         for topic, increase in topic_increases.items():
@@ -1191,20 +1490,17 @@ def render_completed_milestone(mil_id, mil_info, pm_data, data_df, project_optio
                 save_planned_milestones(pm_data)
                 st.rerun()
 
+APP_CONFIG = load_app_config()
+BASE_PROJECTS = APP_CONFIG["BASE_PROJECTS"]
+BASE_TOPICS = APP_CONFIG["BASE_TOPICS"]
 
-# ── Startup: pull any newer files from Drive before loading local data ──
-# Runs once per session using a session-state flag so it doesn't repeat
-# on every Streamlit widget interaction / rerun.
-if not st.session_state.get("_drive_restore_done", False):
-    try:
-        restore_data_from_drive_if_needed()
-        st.cache_data.clear()   # Force fresh read after possible Drive restore
-    except Exception:
-        pass
-    st.session_state["_drive_restore_done"] = True
+if "initial_sync_done" not in st.session_state:
+    restore_data_from_drive_if_needed()
+    st.session_state["initial_sync_done"] = True
 
-tasks_file_mtime = os.path.getmtime("data/tasks.xlsx") if os.path.exists("data/tasks.xlsx") else None
-df = load_data(tasks_file_mtime)
+df = load_data()
+daily_task_df = load_daily_task_data()
+employee_accounts = get_employee_credentials()
 notes_db = load_notes()
 planned_milestones_db = load_planned_milestones()
 projects, topics, PROJECT_TOPIC_REGISTRY = build_project_topic_registry(df, planned_milestones_db, notes_db)
@@ -1212,8 +1508,10 @@ projects, topics, PROJECT_TOPIC_REGISTRY = build_project_topic_registry(df, plan
 # --- DYNAMIC PROJECTS & TOPICS ---
 # Isolate Employees
 base_emps = APP_CONFIG["BASE_EMPLOYEES"]
+credential_emps = [row["name"] for row in employee_accounts]
 saved_emps = [str(e) for e in df.get('Employee', pd.Series([])).dropna().unique() if str(e).strip() != ""]
-employees = list(dict.fromkeys(base_emps + saved_emps))
+daily_task_emps = [str(e) for e in daily_task_df.get("Responsible Person", pd.Series([])).dropna().unique() if str(e).strip() != ""]
+employees = list(dict.fromkeys(base_emps + credential_emps + saved_emps + daily_task_emps))
 
 STATUS_OPTIONS = APP_CONFIG["STATUS_OPTIONS"]
 
@@ -1232,6 +1530,12 @@ if 'preferred_weekly_project' not in st.session_state:
     st.session_state.preferred_weekly_project = None
 if 'preferred_weekly_week' not in st.session_state:
     st.session_state.preferred_weekly_week = None
+if 'workspace_page' not in st.session_state:
+    st.session_state.workspace_page = None
+if 'show_employee_signup' not in st.session_state:
+    st.session_state.show_employee_signup = False
+if 'last_full_nav_page' not in st.session_state:
+    st.session_state.last_full_nav_page = "Dashboard"
 
 if st.session_state.role is None:
     st.title("🔒 PMO Authentication Gateway")
@@ -1242,13 +1546,31 @@ if st.session_state.role is None:
     with auth_col1:
         st.subheader("👨‍💻 Employee Verification")
         emp_name = st.text_input("Enter your full name", key="emp_n")
+        emp_password = st.text_input("Enter your password", type="password", key="emp_p")
         if st.button("Enter PMO (Employee)", use_container_width=True):
-            if str(emp_name).strip() != "":
+            if authenticate_employee(emp_name, emp_password):
                 st.session_state.role = "Employee"
                 st.session_state.auth_name = str(emp_name).strip()
+                st.session_state.workspace_page = None
                 st.rerun()
             else:
-                st.error("Identification required.")
+                st.error("Invalid employee name or password.")
+
+        if st.button("Sign up", type="tertiary", key="show_signup_btn"):
+            st.session_state.show_employee_signup = not st.session_state.show_employee_signup
+            st.rerun()
+
+        if st.session_state.show_employee_signup:
+            st.markdown("##### Create Employee Account")
+            signup_name = st.text_input("Create your name", key="signup_name")
+            signup_password = st.text_input("Create your password", type="password", key="signup_password")
+            if st.button("Create Employee Account", use_container_width=True):
+                created, signup_message = register_employee(signup_name, signup_password)
+                if created:
+                    st.session_state.show_employee_signup = False
+                    st.success("Employee account created. You can now sign in.")
+                else:
+                    st.error(signup_message)
                 
     with auth_col2:
         st.subheader("🛡️ Administrator Override")
@@ -1257,6 +1579,7 @@ if st.session_state.role is None:
             if admin_pass == APP_CONFIG.get("ADMIN_PASSWORD", "effica123"):
                 st.session_state.role = "Admin"
                 st.session_state.auth_name = "Administrator"
+                st.session_state.workspace_page = None
                 st.rerun()
             else:
                 st.error("Invalid security clearance.")
@@ -1267,24 +1590,250 @@ st.sidebar.title("BASELINE PMO")
 st.sidebar.caption(f"Logged in as: **{st.session_state.auth_name}** ({st.session_state.role})")
 if st.sidebar.button("🚪 Logout Data Session"):
     st.session_state.role = None
+    st.session_state.auth_name = None
+    st.session_state.workspace_page = None
     st.rerun()
 st.sidebar.divider()
-nav_options = APP_CONFIG.get("NAV_OPTIONS", ["Dashboard", "Weekly Performance", "Tasks & Milestones", "Planned Milestones", "Image Gallery", "Competitors & Research"])
+if st.session_state.workspace_page is None:
+    st.title("Workspace")
+    st.write("Choose where you want to go.")
+    go_col1, go_col2 = st.columns(2)
+    with go_col1:
+        if st.button("Dashboard", use_container_width=True):
+            st.session_state.workspace_page = "Dashboard"
+            st.rerun()
+    with go_col2:
+        if st.button("Task Sheet", use_container_width=True):
+            st.session_state.workspace_page = "Task Sheet"
+            st.rerun()
+    st.stop()
+
+full_nav_options = APP_CONFIG.get(
+    "NAV_OPTIONS",
+    ["Dashboard", "Weekly Performance", "Tasks & Milestones", "Planned Milestones", "Image Gallery", "Competitors & Research"]
+)
 if st.session_state.role == "Admin":
-    nav_options.append("Document Drive")
+    full_nav_options = full_nav_options + ["Employee Access", "Document Drive"]
+
+if st.session_state.workspace_page == "Task Sheet":
+    nav_options = ["Task Sheet"]
+else:
+    nav_options = full_nav_options
 
 # Handle jumps from Dashboard links
 default_ix = 0
 if "jump_to_page" in st.session_state and st.session_state.jump_to_page in nav_options:
     default_ix = nav_options.index(st.session_state.jump_to_page)
     del st.session_state.jump_to_page
+elif st.session_state.workspace_page == "Dashboard" and st.session_state.last_full_nav_page in nav_options:
+    default_ix = nav_options.index(st.session_state.last_full_nav_page)
+elif st.session_state.workspace_page in nav_options:
+    default_ix = nav_options.index(st.session_state.workspace_page)
 
 page = st.sidebar.selectbox("Navigation", nav_options, index=default_ix)
+if page == "Task Sheet":
+    st.session_state.workspace_page = "Task Sheet"
+else:
+    st.session_state.workspace_page = "Dashboard"
+    st.session_state.last_full_nav_page = page
+
+# ─────────────────────────────────────────────
+# TASK SHEET PAGE
+# ─────────────────────────────────────────────
+if page == "Task Sheet":
+    st.title("Task Sheet")
+    task_sheet_df = daily_task_df.copy()
+    task_sheet_df["Assigned Date"] = pd.to_datetime(task_sheet_df["Assigned Date"], errors="coerce")
+
+    st.caption("Daily task data is stored in `data/daily_task_daywise.xlsx` with one sheet per assigned date.")
+
+    top_col1, top_col2 = st.columns(2)
+
+    available_people = sorted([
+        str(name).strip()
+        for name in employees
+        if str(name).strip() and str(name).strip() != "Unassigned"
+    ])
+
+    if st.session_state.role == "Admin":
+        employee_filter_options = ["All"] + available_people
+        selected_person = top_col1.selectbox("Employee Selection", employee_filter_options, key="ts_admin_person")
+        assigned_date_choices = ["All Dates"] + sorted(
+            [dt.strftime("%Y-%m-%d") for dt in task_sheet_df["Assigned Date"].dropna().dt.date.unique()]
+        )
+        selected_assigned_date = top_col2.selectbox("Assigned Date Selection", assigned_date_choices, key="ts_admin_date")
+
+        filtered_task_df = task_sheet_df.copy()
+        if selected_person != "All":
+            filtered_task_df = filtered_task_df[
+                filtered_task_df["Responsible Person"].astype(str).str.strip() == selected_person
+            ]
+        if selected_assigned_date != "All Dates":
+            filtered_task_df = filtered_task_df[
+                filtered_task_df["Assigned Date"].dt.strftime("%Y-%m-%d") == selected_assigned_date
+            ]
+
+        if filtered_task_df.empty and selected_person != "All":
+            default_assigned_date = pd.Timestamp(datetime.now().date())
+            if selected_assigned_date != "All Dates":
+                parsed_selected_date = pd.to_datetime(selected_assigned_date, errors="coerce")
+                if pd.notna(parsed_selected_date):
+                    default_assigned_date = parsed_selected_date
+            filtered_task_df = pd.DataFrame([{
+                "Task ID": "",
+                "Department": "R&D",
+                "Assigned Date": default_assigned_date,
+                "Planned Completion %": 0,
+                "Task Description": "",
+                "Task Status": "",
+                "Assignee Email": "",
+                "Responsible Person": selected_person,
+                "Allocated Hrs": 0,
+            }])
+
+        st.subheader("Manage Daily Tasks")
+        admin_editor_df = filtered_task_df.copy()
+        default_assigned_date = pd.Timestamp(datetime.now().date())
+        if selected_assigned_date != "All Dates":
+            parsed_selected_date = pd.to_datetime(selected_assigned_date, errors="coerce")
+            if pd.notna(parsed_selected_date):
+                default_assigned_date = parsed_selected_date
+        new_task_row = {
+            "Task ID": "",
+            "Department": "R&D",
+            "Assigned Date": default_assigned_date,
+            "Planned Completion %": 0,
+            "Task Description": "",
+            "Task Status": "",
+            "Assignee Email": "",
+            "Responsible Person": "" if selected_person == "All" else selected_person,
+            "Allocated Hrs": 0,
+        }
+        for extra_col in admin_editor_df.columns:
+            if extra_col not in new_task_row:
+                new_task_row[extra_col] = ""
+        admin_editor_df = pd.concat([admin_editor_df, pd.DataFrame([new_task_row])], ignore_index=True)
+        admin_editor_df["Assigned Date"] = admin_editor_df["Assigned Date"].dt.date
+        for text_col in admin_editor_df.columns:
+            if text_col not in ["Assigned Date", "Planned Completion %", "Allocated Hrs"]:
+                admin_editor_df[text_col] = admin_editor_df[text_col].fillna("").astype(str)
+        if "Planned Completion %" in admin_editor_df.columns:
+            admin_editor_df["Planned Completion %"] = pd.to_numeric(admin_editor_df["Planned Completion %"], errors="coerce").fillna(0)
+        if "Allocated Hrs" in admin_editor_df.columns:
+            admin_editor_df["Allocated Hrs"] = pd.to_numeric(admin_editor_df["Allocated Hrs"], errors="coerce").fillna(0)
+
+        manage_col1, manage_col2, manage_col3 = st.columns([2, 1, 2])
+        removable_columns = [col for col in task_sheet_df.columns if col not in DAILY_TASK_COLUMNS]
+        new_column_name = manage_col1.text_input("Add Column Name", key="ts_new_column_name")
+        if manage_col2.button("Add Column", use_container_width=True):
+            clean_new_column = str(new_column_name).strip()
+            if not clean_new_column:
+                st.error("Enter a column name.")
+            elif clean_new_column in task_sheet_df.columns:
+                st.error("Column already exists.")
+            else:
+                task_sheet_df[clean_new_column] = ""
+                save_daily_task_data(task_sheet_df)
+                st.success(f"Column '{clean_new_column}' added.")
+                st.rerun()
+        remove_column_name = manage_col3.selectbox(
+            "Remove Column",
+            [""] + removable_columns,
+            key="ts_remove_column_name"
+        )
+        if manage_col3.button("Delete Column", use_container_width=True):
+            if not remove_column_name:
+                st.error("Select a column to remove.")
+            else:
+                updated_task_sheet_df = task_sheet_df.drop(columns=[remove_column_name])
+                save_daily_task_data(updated_task_sheet_df)
+                st.success(f"Column '{remove_column_name}' removed.")
+                st.rerun()
+
+        edited_task_df = st.data_editor(
+            admin_editor_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="daily_task_editor",
+            column_config={
+                "Task ID": st.column_config.TextColumn("Task ID", disabled=True, width="small"),
+                "Department": st.column_config.TextColumn("Department"),
+                "Assigned Date": st.column_config.DateColumn("Assigned Date", format="YYYY-MM-DD"),
+                "Planned Completion %": st.column_config.NumberColumn("Planned Completion %", min_value=0, max_value=100, step=1),
+                "Task Description": st.column_config.TextColumn("Task Description", width="large"),
+                "Task Status": st.column_config.TextColumn("Task Status"),
+                "Assignee Email": st.column_config.TextColumn("Assignee Email"),
+                "Responsible Person": st.column_config.SelectboxColumn("Responsible Person", options=[name for name in employees if name != "Unassigned"]),
+                "Allocated Hrs": st.column_config.NumberColumn("Allocated Hrs", min_value=0, step=1),
+            }
+        )
+
+        if st.button("Save Daily Task Sheet"):
+            clean_task_df = edited_task_df.fillna("").copy()
+            clean_task_df["Assigned Date"] = pd.to_datetime(clean_task_df["Assigned Date"], errors="coerce")
+            if "Planned Completion %" in clean_task_df.columns:
+                clean_task_df["Planned Completion %"] = pd.to_numeric(clean_task_df["Planned Completion %"], errors="coerce").fillna(0).clip(0, 100)
+            if "Allocated Hrs" in clean_task_df.columns:
+                clean_task_df["Allocated Hrs"] = pd.to_numeric(clean_task_df["Allocated Hrs"], errors="coerce").fillna(0)
+            for col in clean_task_df.columns:
+                if col not in ["Assigned Date", "Planned Completion %", "Allocated Hrs"]:
+                    clean_task_df[col] = clean_task_df[col].astype(str).str.strip()
+            if "Task ID" in clean_task_df.columns:
+                missing_task_id_mask = clean_task_df["Task ID"] == ""
+                if missing_task_id_mask.any():
+                    clean_task_df.loc[missing_task_id_mask, "Task ID"] = [str(uuid4()) for _ in range(int(missing_task_id_mask.sum()))]
+            clean_task_df = clean_task_df[
+                ~(
+                    (clean_task_df.get("Department", "") == "") &
+                    (clean_task_df.get("Task Description", "") == "") &
+                    (clean_task_df.get("Responsible Person", "") == "")
+                )
+            ]
+            ordered_cols = DAILY_TASK_COLUMNS + [col for col in clean_task_df.columns if col not in DAILY_TASK_COLUMNS]
+            merged_task_df = task_sheet_df.copy()
+            original_task_ids = set(
+                filtered_task_df.get("Task ID", pd.Series(dtype=str)).fillna("").astype(str).str.strip().tolist()
+            )
+            original_task_ids.discard("")
+            if original_task_ids:
+                preserved_task_df = merged_task_df[
+                    ~merged_task_df["Task ID"].astype(str).str.strip().isin(original_task_ids)
+                ].copy()
+            else:
+                preserved_task_df = merged_task_df.copy()
+            final_task_df = pd.concat([preserved_task_df, clean_task_df[ordered_cols]], ignore_index=True)
+            save_daily_task_data(final_task_df[ordered_cols])
+            st.success("Daily task sheet saved.")
+            st.rerun()
+    else:
+        employee_name = str(st.session_state.auth_name or "").strip()
+        selected_assigned_date = top_col1.selectbox(
+            "Assigned Date Selection",
+            ["All Dates"] + sorted([dt.strftime("%Y-%m-%d") for dt in task_sheet_df["Assigned Date"].dropna().dt.date.unique()]),
+            key="ts_emp_date"
+        )
+        top_col2.text_input("Employee Selection", value=employee_name, disabled=True, key="ts_emp_name")
+
+        employee_task_df = task_sheet_df[
+            task_sheet_df["Responsible Person"].astype(str).str.strip() == employee_name
+        ].copy()
+        if selected_assigned_date != "All Dates":
+            employee_task_df = employee_task_df[
+                employee_task_df["Assigned Date"].dt.strftime("%Y-%m-%d") == selected_assigned_date
+            ]
+
+        st.subheader(f"Tasks for {employee_name}")
+        if employee_task_df.empty:
+            st.info("No tasks assigned.")
+        else:
+            visible_employee_task_df = employee_task_df.drop(columns=["Task ID"], errors="ignore")
+            st.dataframe(visible_employee_task_df, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────
 # DASHBOARD PAGE
 # ─────────────────────────────────────────────
-if page == "Dashboard":
+elif page == "Dashboard":
     st.title("R&D Project Overview & Analytics")
     pm_data = load_planned_milestones()
     
@@ -1326,7 +1875,7 @@ if page == "Dashboard":
                 try:
                     with open(meta_path, "r") as mf:
                         topic_meta = json.load(mf)
-                except:
+                except Exception:
                     topic_meta = {}
 
             # 1. Upload Section at the TOP
@@ -1441,7 +1990,7 @@ if page == "Dashboard":
                                     if os.path.exists(file_path):
                                         try:
                                             os.remove(file_path)
-                                        except:
+                                        except Exception:
                                             pass
                                     if "files" in topic_meta and file_item in topic_meta["files"]:
                                         del topic_meta["files"][file_item]
@@ -2414,7 +2963,7 @@ elif page == "Planned Milestones":
                                 t_end_val = pd.to_datetime(t_info.get("to_date", cur_m_end)).date()
                                 t_start_val = max(cur_m_start, min(cur_m_end, t_start_val))
                                 t_end_val = max(cur_m_start, min(cur_m_end, t_end_val))
-                            except:
+                            except Exception:
                                 t_start_val = cur_m_start
                                 t_end_val = cur_m_end
 
@@ -2723,6 +3272,50 @@ elif page == "Competitors & Research":
 
 
 # ─────────────────────────────────────────────
+# EMPLOYEE ACCESS PAGE
+# ─────────────────────────────────────────────
+elif page == "Employee Access":
+    st.header("Employee Access Control")
+
+    if st.session_state.role != "Admin":
+        st.error("🔒 Access Denied: Administrator clearance required.")
+        st.stop()
+
+    st.caption("Manage employee login using exact name and password pairs.")
+    employee_creds_df = pd.DataFrame(get_employee_credentials(), columns=["name", "password"])
+    edited_creds_df = st.data_editor(
+        employee_creds_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="employee_access_editor"
+    )
+
+    if st.button("Save Employee Credentials"):
+        cleaned_creds = []
+        seen_names = set()
+        invalid_rows = False
+
+        for _, row in edited_creds_df.fillna("").iterrows():
+            name = str(row.get("name", "")).strip()
+            password = str(row.get("password", "")).strip()
+            if not name and not password:
+                continue
+            if not name or not password or name in seen_names:
+                invalid_rows = True
+                continue
+            seen_names.add(name)
+            cleaned_creds.append({"name": name, "password": password})
+
+        if invalid_rows:
+            st.error("Each employee row needs a unique name and password.")
+        elif not cleaned_creds:
+            st.error("Add at least one employee credential.")
+        else:
+            save_employee_accounts(cleaned_creds)
+            st.success("Employee credentials updated.")
+            st.rerun()
+
+# ─────────────────────────────────────────────
 # DOCUMENT DRIVE PAGE
 # ─────────────────────────────────────────────
 elif page == "Document Drive":
@@ -2790,7 +3383,7 @@ elif page == "Document Drive":
         try:
             with open(meta_path, "r") as mf:
                 topic_dir_meta = json.load(mf)
-        except:
+        except Exception:
             pass
 
     st.markdown(f"### 📂 Assets for **{t_proj}** » **{t_topic}**")
@@ -2885,7 +3478,7 @@ elif page == "Document Drive":
                         if os.path.exists(file_path):
                             try:
                                 os.remove(file_path)
-                            except:
+                            except Exception:
                                 pass
                         if file_item in topic_meta.get("file_notes", {}):
                             del topic_meta["file_notes"][file_item]
