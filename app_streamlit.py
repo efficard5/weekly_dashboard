@@ -623,12 +623,47 @@ def save_drive_metadata(data):
     _async_drive_backup("data/drive_metadata.json", ["data_backups"], rename_file=f"drive_metadata_backup_{timestamp}.json")
 
 def load_competitor_data():
+    # 1. Try Excel from Drive
+    xlsx_bytes = _read_data_file_bytes_from_drive("competitors.xlsx")
+    if xlsx_bytes:
+        try:
+            df_dict = pd.read_excel(io.BytesIO(xlsx_bytes), sheet_name=None)
+            comp_data = {}
+            for sheet_name, df in df_dict.items():
+                comp_data[sheet_name] = df.fillna("").to_dict(orient="records")
+            if comp_data:
+                return comp_data
+        except Exception:
+            pass
+
+    # 2. Try JSON from Drive
     competitor_bytes = _read_data_file_bytes_from_drive("competitors.json")
     if competitor_bytes is not None:
         try:
             return json.loads(competitor_bytes.decode("utf-8"))
         except Exception:
-            return {"Unloading Rate": []}
+            pass
+            
+    # 3. Fallback to Local Excel
+    if os.path.exists("data/competitors.xlsx"):
+        try:
+            df_dict = pd.read_excel("data/competitors.xlsx", sheet_name=None)
+            comp_data = {}
+            for sheet_name, df in df_dict.items():
+                comp_data[sheet_name] = df.fillna("").to_dict(orient="records")
+            if comp_data:
+                return comp_data
+        except Exception:
+            pass
+
+    # 4. Fallback to Local JSON
+    if os.path.exists("data/competitors.json"):
+        try:
+            with open("data/competitors.json", "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
     return {"Unloading Rate": []}
 
 def save_competitor_data(data):
